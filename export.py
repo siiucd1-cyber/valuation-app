@@ -235,23 +235,24 @@ def build_workbook(cd: dict, A, res: dict) -> bytes:
     e = res["emp"]
     info = [("参数来源", e.get("方法", "—")), ("观测区间", e.get("区间", "—")), ("观测数", e.get("观测数", 0)),
             ("营收增速标准差（pp）", e.get("增速标准差")), ("核心经营利润率标准差（pp）", e.get("利润率标准差")),
-            ("相关系数", e.get("相关系数")), ("第1年增速波动缩放", res["y1_scale"]),
+            ("相关系数", e.get("相关系数")), ("折现率σ（pp）", res.get("sig_w", 0.0)),
+            ("永续增长率σ（pp）", res.get("sig_gt", 0.0)), ("第1年增速波动缩放", res["y1_scale"]),
             ("模拟次数", res["sims"])]
     for i, (k, v) in enumerate(info, start=3):
         _c(wm, i, 1, T(k), al="left"); _c(wm, i, 2, v, BLUE, N2 if isinstance(v, float) else None)
-    _head(wm, 12, ["年份"] + [f"{base + i + 1}E" for i in range(n)])
-    _c(wm, 13, 1, T("增速σ（pp）"), al="left"); _c(wm, 14, 1, T("利润率σ（pp）"), al="left")
+    _head(wm, 14, ["年份"] + [f"{base + i + 1}E" for i in range(n)])
+    _c(wm, 15, 1, T("增速σ（pp）"), al="left"); _c(wm, 16, 1, T("利润率σ（pp）"), al="left")
     for i in range(n):
-        _c(wm, 13, 2 + i, float(res["mc_sg"][i]), BLUE, N2)
-        _c(wm, 14, 2 + i, float(res["mc_sm"][i]), BLUE, N2)
-    _head(wm, 16, ["指标", "P5", "P25", "P50", "P75", "P95"])
+        _c(wm, 15, 2 + i, float(res["mc_sg"][i]), BLUE, N2)
+        _c(wm, 16, 2 + i, float(res["mc_sm"][i]), BLUE, N2)
+    _head(wm, 18, ["指标", "P5", "P25", "P50", "P75", "P95"])
     for r_, (k, d) in enumerate([(T("{y}年归母净利润（万元）", y=base + 1), res["mc_np"]),
-                                  (T("折现法每股价值（元）"), res["mc_ps"])], start=17):
+                                  (T("折现法每股价值（元）"), res["mc_ps"])], start=19):
         _c(wm, r_, 1, k, al="left")
         for j, p in enumerate(["P5", "P25", "P50", "P75", "P95"]):
             _c(wm, r_, 2 + j, float(d[p]), BLUE, N2)
-    wm["A20"] = T("蒙特卡洛依赖随机抽样，无法用单元格公式表达，此处为导出时的计算结果。")
-    wm["A20"].font = NOTE
+    wm["A22"] = T("蒙特卡洛依赖随机抽样，无法用单元格公式表达，此处为导出时的计算结果。")
+    wm["A22"].font = NOTE
 
     for w in wb.worksheets:
         w.sheet_view.showGridLines = False

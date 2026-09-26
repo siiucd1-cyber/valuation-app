@@ -41,7 +41,6 @@ class Assumptions:
     # 净现金口径
     add_cash: bool = True
     add_fin: bool = True
-    # 市盈率法
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -208,9 +207,10 @@ def series_params(obs: pd.DataFrame, last_n: int | None = None) -> dict:
 
 def monte_carlo(rev0: float, a: Assumptions, w: float, nc: float, shares_wan: float,
                 sig_g: float, sig_m: float, rho: float, y1_scale: float = 1.0,
-                n: int = 20000, seed: int = 20260921) -> dict:
+                n: int = 20000, seed: int = 20260921, sig_w: float = 0.0, sig_gt: float = 0.0) -> dict:
     """每年独立抽取营收增速与核心经营利润率的冲击，二者按实测相关系数相关。
-    第 1 年增速波动按当年已披露季度比例缩小；远期波动逐年放大。"""
+    第 1 年增速波动按当年已披露季度比例缩小；远期波动逐年放大。
+    sig_w / sig_gt > 0 时，折现率与永续增长率也逐次随机抽取（永续增长率至少比折现率低 1 个百分点）。"""
     rng = np.random.default_rng(seed)
     N = a.years
     g0 = np.linspace(a.g_first, a.g_last, N)
@@ -228,11 +228,123 @@ def monte_carlo(rev0: float, a: Assumptions, w: float, nc: float, shares_wan: fl
     parent = (core + other) * (1 - a.tax / 100) * (1 - a.minority / 100)
     nopat = (core + other * a.other_in_fcf / 100) * (1 - a.tax / 100)
     fcff = nopat + rev * a.da_pct / 100 - rev * a.capex_pct / 100 - (rev - prev) * a.nwc_pct / 100
-    disc = 1 / (1 + w / 100) ** np.arange(1, N + 1)
-    tv = fcff[:, -1] * (1 + a.g_term / 100) / (w / 100 - a.g_term / 100) * disc[-1]
+    # 折现率与永续增长率的抽样放在最后，保证 sig_w = sig_gt = 0 时结果与只抽经营变量时完全一致
+    ww = np.maximum(w + sig_w * rng.standard_normal(n), 2.0) if sig_w > 0 else np.full(n, w)
+    gt = a.g_term + sig_gt * rng.standard_normal(n) if sig_gt > 0 else np.full(n, a.g_term)
+    gt = np.minimum(gt, ww - 1.0)
+    disc = 1 / (1 + ww[:, None] / 100) ** np.arange(1, N + 1)
+    tv = fcff[:, -1] * (1 + gt / 100) / (ww / 100 - gt / 100) * disc[:, -1]
     ps = ((fcff * disc).sum(axis=1) + tv + nc) / shares_wan
     return {"第1年归母净利润": parent[:, 0], "第1年核心经营利润率": m[:, 0],
-            "每股价值": ps, "增速σ": sg, "利润率σ": sm}
+            "每股价值": ps, "增速σ": sg, "利润率σ": sm,
+            "抽样": pd.DataFrame({"营收增速": g.mean(axis=1), "核心经营利润率": m.mean(axis=1),
+                                "折现率": ww, "永续增长率": gt})}
+
+
+def uncertainty_share(draws: pd.DataFrame, value: np.ndarray) -> pd.Series:
+    """各随机输入对估值不确定性的贡献：秩相关系数平方归一化（常数输入记 0）。"""
+    r = pd.Series(value).rank()
+    rho = {}
+    for c in draws.columns:
+        x = draws[c]
+        rho[c] = 0.0 if x.std() == 0 else float(np.corrcoef(x.rank(), r)[0, 1])
+    rho = pd.Series(rho)
+    share = rho ** 2 / (rho ** 2).sum() * 100 if (rho ** 2).sum() > 0 else rho * 0
+    return pd.DataFrame({"秩相关系数": rho, "贡献%": share}).sort_values("贡献%", ascending=False)
+
+
+# ─────────────────────────── 单因素敏感性、反向拆解
+def value_of(a: Assumptions, rev0: float, base_year: int, bs: dict, mcap_wan: float,
+             shares_wan: float, w: float | None = None) -> float:
+    """按一组假设算折现法每股价值；w 给定时直接用该折现率。折现率不高于永续增长率时返回 nan。"""
+    w = wacc(a, bs["有息负债"], mcap_wan)["WACC"] if w is None else w
+    if w <= a.g_term:
+        return float("nan")
+    fc = forecast(rev0, base_year, a)
+    return dcf(fc, w, a.g_term, net_cash(bs, a)["净现金"], shares_wan)["每股价值"]
+
+
+def tornado(a: Assumptions, rev0: float, base_year: int, bs: dict, mcap_wan: float, shares_wan: float,
+            sig_g: float, sig_m: float, sig_w: float, sig_gt: float) -> pd.DataFrame:
+    """每次只动一个假设（上下各一个标准差或给定幅度），看每股价值变化，按影响大小排序。"""
+    from dataclasses import replace
+    w0 = wacc(a, bs["有息负债"], mcap_wan)["WACC"]
+    base = value_of(a, rev0, base_year, bs, mcap_wan, shares_wan, w0)
+    cases = [
+        ("营收增速（各年）", f"±{sig_g:.1f}pp",
+         replace(a, g_first=a.g_first - sig_g, g_last=a.g_last - sig_g), None,
+         replace(a, g_first=a.g_first + sig_g, g_last=a.g_last + sig_g), None),
+        ("核心经营利润率（各年）", f"±{sig_m:.1f}pp",
+         replace(a, m_first=a.m_first - sig_m, m_last=a.m_last - sig_m), None,
+         replace(a, m_first=a.m_first + sig_m, m_last=a.m_last + sig_m), None),
+        ("折现率", f"±{sig_w:.1f}pp", a, w0 + sig_w, a, max(w0 - sig_w, a.g_term + 0.5)),
+        ("永续增长率", f"±{sig_gt:.1f}pp", replace(a, g_term=a.g_term - sig_gt), w0,
+         replace(a, g_term=min(a.g_term + sig_gt, w0 - 0.5)), w0),
+        ("资本开支 / 营收", "±1.0pp", replace(a, capex_pct=a.capex_pct + 1), w0,
+         replace(a, capex_pct=max(a.capex_pct - 1, 0)), w0),
+        ("营运资本 / 营收", "±5.0pp", replace(a, nwc_pct=a.nwc_pct + 5), w0,
+         replace(a, nwc_pct=max(a.nwc_pct - 5, 0)), w0),
+        ("有效税率", "±5.0pp", replace(a, tax=a.tax + 5), w0, replace(a, tax=max(a.tax - 5, 0)), w0),
+    ]
+    rows = []
+    for name, rng_, a_lo, w_lo, a_hi, w_hi in cases:
+        lo = value_of(a_lo, rev0, base_year, bs, mcap_wan, shares_wan, w_lo)
+        hi = value_of(a_hi, rev0, base_year, bs, mcap_wan, shares_wan, w_hi)
+        lo, hi = min(lo, hi), max(lo, hi)
+        rows.append({"因素": name, "变动幅度": rng_, "低": lo, "高": hi, "区间": hi - lo})
+    out = pd.DataFrame(rows).sort_values("区间", ascending=False).reset_index(drop=True)
+    out.attrs["基准"] = base
+    return out
+
+
+def bridge(a: Assumptions, rev0: float, base_year: int, bs: dict, mcap_wan: float,
+           shares_wan: float) -> pd.DataFrame:
+    """从当前假设出发，逐步放宽到更乐观的假设，看每股价值如何累积变化（反向拆解现价隐含了什么）。"""
+    from dataclasses import replace
+    steps = [
+        ("当前假设", {}),
+        ("贝塔调为 1.0（市场平均风险）", {"beta": 1.0}),
+        ("去掉规模溢价", {"size_prem": 0.0}),
+        ("投资收益全部计入现金流、不再下降", {"other_in_fcf": 100.0, "other_change": 0.0}),
+        ("第5年营收增速 +10pp", {"g_last": a.g_last + 10}),
+        ("第5年核心经营利润率 +5pp", {"m_last": a.m_last + 5}),
+        ("永续增长率 +1pp", {"g_term": a.g_term + 1}),
+    ]
+    cur, rows = a, []
+    for name, ch in steps:
+        cur = replace(cur, **ch)
+        rows.append({"步骤": name, "折现率%": wacc(cur, bs["有息负债"], mcap_wan)["WACC"],
+                     "每股价值": value_of(cur, rev0, base_year, bs, mcap_wan, shares_wan)})
+    return pd.DataFrame(rows)
+
+
+def implied_single(a: Assumptions, rev0: float, base_year: int, bs: dict, mcap_wan: float,
+                   shares_wan: float, price: float) -> pd.DataFrame:
+    """其他假设不变，单独调整一个参数使折现法等于现价，求该参数需要的取值。"""
+    from dataclasses import replace
+    w0 = wacc(a, bs["有息负债"], mcap_wan)["WACC"]
+
+    def solve(f, lo, hi):
+        flo, fhi = f(lo) - price, f(hi) - price
+        if not (np.isfinite(flo) and np.isfinite(fhi)) or flo * fhi > 0:
+            return float("nan")
+        for _ in range(70):
+            mid = (lo + hi) / 2
+            fm = f(mid) - price
+            if not np.isfinite(fm):
+                return float("nan")
+            lo, hi, flo = (mid, hi, fm) if fm * flo > 0 else (lo, mid, flo)
+        return (lo + hi) / 2
+
+    v = lambda aa, w=None: value_of(aa, rev0, base_year, bs, mcap_wan, shares_wan, w)
+    rows = [
+        ("折现率（%）", w0, solve(lambda x: v(a, x), a.g_term + 0.05, 60)),
+        ("贝塔", a.beta, solve(lambda x: v(replace(a, beta=x)), 0.0, 6.0)),
+        ("各年营收增速同时增加（pp）", 0.0, solve(lambda x: v(replace(a, g_first=a.g_first + x, g_last=a.g_last + x)), -30, 150)),
+        ("各年核心经营利润率同时增加（pp）", 0.0, solve(lambda x: v(replace(a, m_first=a.m_first + x, m_last=a.m_last + x)), -30, 80)),
+        ("永续增长率（%）", a.g_term, solve(lambda x: v(replace(a, g_term=x), w0), -5.0, w0 - 0.05)),
+    ]
+    return pd.DataFrame(rows, columns=["参数", "当前", "达到现价所需"])
 
 
 def pct_table(x: np.ndarray, ps=(5, 25, 50, 75, 95)) -> dict:

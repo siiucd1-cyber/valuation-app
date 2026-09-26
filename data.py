@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 import os
 import warnings
@@ -365,7 +366,7 @@ def load_snapshot(path: str) -> dict:
     out = {}
     for k, v in raw.items():
         if isinstance(v, dict) and "__df__" in v:
-            df = pd.read_json(v["__df__"], orient="split")
+            df = pd.read_json(io.StringIO(v["__df__"]), orient="split")
             if v.get("index") and v["index"] in df.columns:
                 df = df.set_index(v["index"])
             elif "index" in df.columns:
@@ -373,7 +374,7 @@ def load_snapshot(path: str) -> dict:
             df.attrs = v.get("attrs") or {}
             out[k] = df
         elif isinstance(v, dict) and "__s__" in v:
-            s = pd.read_json(v["__s__"], orient="split", typ="series")
+            s = pd.read_json(io.StringIO(v["__s__"]), orient="split", typ="series")
             s.index = pd.to_datetime(s.index)
             out[k] = s
         else:

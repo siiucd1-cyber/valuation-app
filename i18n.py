@@ -57,6 +57,13 @@ def tr_msg(s: str) -> str:
 
 
 ZH = {
+    "TORNADO_NOTE": ("左图每次只动一个假设（其余不变），上下各变动一个标准差或给定幅度，条越长说明估值对它越敏感；"
+                     "营收增速、利润率、折现率的变动幅度取上方不确定性参数。右图来自蒙特卡洛：所有不确定因素同时随机变化时，"
+                     "用每个输入与每股价值的秩相关系数平方分解估值波动的来源。"),
+    "BRIDGE_NOTE": ("左图从当前假设出发，逐步换成更乐观的假设，看每股价值累积到哪里能追上现价；"
+                    "右表是只动一个参数、其他全部不变时需要的取值。所需取值越离谱，说明现价隐含的预期越难实现。"),
+    "SW_HELP": ("默认 = 贝塔回归标准误 {se:.2f} × 市场风险溢价 {erp:.1f}% ≈ {v:.2f} 个百分点："
+                "贝塔是用 100 周数据回归估出来的，本身有误差，这里把它传导到折现率。"),
     "MC_EXPLAIN": (
         "**它不是用来“预测营收”的。** 营收增速和利润率的**中枢**仍是左侧你设定的假设；"
         "蒙特卡洛回答的是另一个问题：**这些假设如果像历史上那样上下波动，估值会落在什么区间？**\n\n"
@@ -71,7 +78,10 @@ ZH = {
         "并不比年度数据多出多少信息——这也是相关系数随窗口变号的原因。\n\n"
         "**历史很长的公司：** 年报有十年以上时，直接用年度同比更干净（观测互不重叠），"
         "本工具在年度观测 ≥ 10 个时默认改用年度口径。但太久远的数据可能反映的是另一个商业模式，"
-        "可以用下方的窗口滑块只取最近 N 年。"),
+        "可以用下方的窗口滑块只取最近 N 年。\n\n"
+        "**折现率和永续增长率也会随机变化：** 贝塔是回归估计值，有标准误；折现率的波动默认取“贝塔标准误 × 市场风险溢价”，"
+        "永续增长率默认上下波动 0.5 个百分点。这样模拟结果同时反映经营和折现两方面的不确定性，"
+        "再用龙卷风图和贡献分解回答“估值到底对什么最敏感”。"),
     "MC_SRC_HELP": ("单季滚动 TTM：观测多，但相邻观测重叠，适合上市时间短的公司；"
                     "年度同比：观测互不重叠，历史长时更可靠；手动输入：自己给定标准差与相关系数。"),
     "MC_CMP_NOTE": ("两种口径并排对比。滚动 TTM 的相邻观测共享 3 个季度，等效独立样本约为观测数 ÷ 4；"
@@ -363,7 +373,11 @@ EN = {
         "also why the correlation flips sign as the window changes.\n\n"
         "**Companies with long histories:** with ten or more years of annual reports, annual YoY data is cleaner "
         "(observations do not overlap), and this tool defaults to it when there are at least 10 annual observations. "
-        "Very old data may reflect a different business, so use the window slider below to keep only the last N years."),
+        "Very old data may reflect a different business, so use the window slider below to keep only the last N years.\n\n"
+        "**The discount rate and terminal growth are random too:** beta is a regression estimate with a standard error, so "
+        "the discount-rate volatility defaults to “beta standard error × equity risk premium”, and terminal growth varies by "
+        "0.5 pp. The simulation therefore reflects both operating and discount-rate uncertainty, and the tornado chart and "
+        "contribution breakdown answer “what is the valuation most sensitive to?”"),
     "分布参数": "Distribution parameters",
     "单季滚动 TTM": "Rolling TTM (quarterly)",
     "年度同比": "Annual YoY",
@@ -437,6 +451,64 @@ EN = {
         "annual YoY or manual input.\n"
         "- A personal study project. All conclusions depend on user assumptions and are not investment advice."),
 
+    # ── 敏感性分析（新增）
+    "敏感性分析": "Sensitivity",
+    "分位数": "Percentile", "每股价值（元）": "Value per share (RMB)",
+    "不确定性参数": "Uncertainty parameters",
+    "经营变量的参数来源": "Source for operating parameters",
+    "营收增速σ": "Revenue growth σ",
+    "核心经营利润率σ": "Core margin σ",
+    "两者相关系数 {r:+.3f}": "Correlation {r:+.3f}",
+    "折现率σ（pp）": "WACC σ (pp)",
+    "永续增长率σ（pp）": "Terminal growth σ (pp)",
+    "永续增长率的不确定性，默认 0.5 个百分点": "Uncertainty in terminal growth; default 0.5 pp",
+    "SW_HELP": ("Default = beta standard error {se:.2f} × equity risk premium {erp:.1f}% ≈ {v:.2f} pp: beta is estimated from "
+                "100 weeks of data and carries estimation error, which is passed through to the discount rate."),
+    "模拟结果：每股价值的分布": "Simulation result: distribution of value per share",
+    "每股价值高于现价的概率：{b:.1%}；{y1}年归母净利润低于{y0}年实际值的概率：{a:.1%}。":
+        "Probability that value per share exceeds the price: {b:.1%}; probability that {y1}E net profit falls below FY{y0}: {a:.1%}.",
+    "每次模拟同时随机抽取：未来5年的营收增速与核心经营利润率（按上方相关系数联动），以及折现率、永续增长率。均值取左侧假设；第1年已披露 {nq} 个季度，增速波动按剩余 {rest:.0%} 缩小；远期波动逐年放大。":
+        "Each run draws five years of revenue growth and core margin (linked by the correlation above) plus the discount rate and terminal growth. Means follow the assumptions on the left; {nq} quarter(s) of year 1 are reported, so year-1 growth volatility is scaled to the remaining {rest:.0%}; volatility widens in later years.",
+    "哪些假设最影响估值": "Which assumptions matter most",
+    "单因素敏感性（元/股）": "One-at-a-time sensitivity (RMB/share)",
+    "不利方向": "Adverse", "有利方向": "Favourable",
+    "基准 {v:.2f}": "Base {v:.2f}",
+    "蒙特卡洛：估值波动来自哪里": "Monte Carlo: where the variance comes from",
+    "TORNADO_NOTE": ("Left: each bar moves one assumption at a time (others fixed) by one standard deviation or the stated amount; "
+                     "longer bars mean higher sensitivity. Growth, margin and WACC shifts use the uncertainty parameters above. "
+                     "Right: from the Monte Carlo, with all uncertain inputs moving together, the squared rank correlation of "
+                     "each input with value per share splits the valuation variance by source."),
+    "折现率 × 永续增长率：每股价值（元）": "WACC × terminal growth: value per share (RMB)",
+    "参数估计细节：历史观测与稳健性检查": "Parameter estimation details: history and robustness",
+    "相关系数随样本窗口的变化": "Correlation by sample window",
+    "各年增速σ：{sg}；利润率σ：{sm}（单位：个百分点）。": "Growth σ by year: {sg}; margin σ: {sm} (percentage points).",
+    "折现率 × 永续增长率的敏感性表、龙卷风图和蒙特卡洛模拟见「敏感性分析」页签。":
+        "The WACC × terminal growth table, tornado chart and Monte Carlo are on the Sensitivity tab.",
+    "营收增速": "Revenue growth", "核心经营利润率": "Core operating margin", "永续增长率": "Terminal growth",
+    "营收增速（各年）": "Revenue growth (all years)", "核心经营利润率（各年）": "Core margin (all years)",
+    "资本开支 / 营收": "Capex / revenue", "营运资本 / 营收": "Working capital / revenue", "有效税率": "Effective tax rate",
+    # ── 首页新增
+    "估值的不确定性（蒙特卡洛 {n:,} 次）": "Valuation uncertainty (Monte Carlo, {n:,} runs)",
+    "现价 {p:.2f}（高于现价概率 {b:.1%}）": "Price {p:.2f} (P(value > price) {b:.1%})",
+    "90% 的模拟结果落在 {p5:.2f}–{p95:.2f} 元，高于现价的概率 {b:.1%}。估值波动的 {s:.0f}% 来自{f}（蒙特卡洛秩相关分解，详见「敏感性分析」页签）。":
+        "90% of simulated values fall between RMB {p5:.2f} and {p95:.2f}; the probability of exceeding the price is {b:.1%}. {s:.0f}% of the valuation variance comes from {f} (rank-correlation decomposition; see the Sensitivity tab).",
+    "现价隐含了什么": "What the price implies",
+    "逐步放宽假设后的每股价值（累积）": "Value per share as assumptions are relaxed step by step (cumulative)",
+    "当前假设": "Current assumptions",
+    "贝塔调为 1.0（市场平均风险）": "Beta to 1.0 (market-average risk)",
+    "去掉规模溢价": "Remove size premium",
+    "投资收益全部计入现金流、不再下降": "Count all investment income as cash flow, no decline",
+    "第5年营收增速 +10pp": "Year-5 revenue growth +10 pp",
+    "第5年核心经营利润率 +5pp": "Year-5 core margin +5 pp",
+    "永续增长率 +1pp": "Terminal growth +1 pp",
+    "只调一个参数时，要达到现价需要：": "Changing one parameter only, reaching the price requires:",
+    "参数": "Parameter", "当前": "Current", "达到现价所需": "Needed to reach price", "无解": "No solution",
+    "折现率（%）": "WACC (%)",
+    "各年营收增速同时增加（pp）": "Add to revenue growth in every year (pp)",
+    "各年核心经营利润率同时增加（pp）": "Add to core margin in every year (pp)",
+    "BRIDGE_NOTE": ("Left: starting from the current assumptions and switching step by step to more optimistic ones, where "
+                    "does value per share catch up with the price? Right: the value one parameter would need, all else "
+                    "unchanged. The more extreme the required value, the harder the price's implied expectations are to meet."),
     # ── Excel
     "{n}（{c}）估值模型": "{n} ({c}) valuation model",
     "说明": "Notes",
