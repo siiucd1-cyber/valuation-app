@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""估值工作台 Valuation Workbench —— 输入 A 股代码，自动拉取财务数据，用折现法、市盈率法与蒙特卡洛模拟做估值。
+"""估值工作台 Valuation Workbench —— 输入 A 股代码，自动拉取财务数据，用折现法与蒙特卡洛模拟做估值。
 
 运行：streamlit run app.py
 """
@@ -15,6 +15,7 @@ import streamlit as st
 import data
 import export
 import model as M
+import template
 from i18n import T, TL, is_en, tr_msg
 
 st.set_page_config(page_title="估值工作台 · Valuation Workbench", layout="wide",
@@ -95,9 +96,6 @@ def defaults_from(cd: dict) -> M.Assumptions:
     capex = float(max(last3["资本开支/营收%"].median(), da))
     nwc = float(np.clip(last3["营运资本/营收%"].median(), 0, 60))
     mcap = cd["quote"]["mcap_yi"]
-    pe = np.nan
-    if cd.get("comps") is not None and len(cd["comps"]):
-        pe = M.comps_stats(cd["comps"])["中位数"]
     return M.Assumptions(
         g_first=round(g1, 1), g_last=round(float(np.clip(g1 * 0.4, 3, 10)), 1),
         m_first=round(m1, 1), m_last=round(m1, 1),
@@ -109,7 +107,6 @@ def defaults_from(cd: dict) -> M.Assumptions:
         beta=round(cd["beta"]["beta"], 2) if cd.get("beta") else 1.2,
         erp=5.5, size_prem=1.0 if mcap < 100 else (0.5 if mcap < 300 else 0.0),
         kd=3.5, g_term=2.5, add_cash=True, add_fin=True,
-        target_pe=round(float(pe), 1) if pe == pe else 30.0,
     )
 
 
@@ -220,9 +217,6 @@ with st.sidebar:
         st.checkbox(T("货币资金计入净现金"), key="a_add_cash")
         st.checkbox(T("交易性金融资产计入净现金"), key="a_add_fin")
 
-    with st.expander(T("市盈率法")):
-        st.number_input(T("目标市盈率（倍）"), key="a_target_pe", step=1.0, format="%.1f",
-                        help=T("默认取可比公司市盈率(TTM)中位数：{v} 倍", v=dflt.target_pe))
 
 A = current_assumptions()
 
@@ -236,7 +230,6 @@ try:
     sens = M.sensitivity(fc, ncd["净现金"], shares_wan, W, A.g_term)
 except ValueError as e:
     st.error(tr_msg(str(e))); st.stop()
-P = M.pe_valuation(fc, shares_wan, A.target_pe)
 ttm = M.rolling_ttm(cd["quarterly"])
 it = cd.get("interim")
 y1_scale = (4 - it["季度数"]) / 4 if it else 1.0
@@ -247,7 +240,7 @@ hi52 = lo52 = np.nan
 if px is not None and len(px):
     last = px[px.index >= px.index[-1] - pd.Timedelta(days=365)]
     hi52, lo52 = float(last.max()), float(last.min())
-comps_med = M.comps_stats(cd["comps"])["中位数"] if cd.get("comps") is not None and len(cd["comps"]) else np.nan
+iw = M.implied_wacc(fc, A.g_term, ncd["净现金"], shares_wan, q["price"])
 
 # ─────────────────────────── 页眉
 chg = q.get("chg_pct", 0) or 0
@@ -261,10 +254,10 @@ st.markdown(
     f"<span class='hdr-sub'>{T(q.get('industry', ''))}　·　{T('数据时间')} {cd.get('asof', '')}　·　{src_txt}</span>",
     unsafe_allow_html=True)
 
-tabs = st.tabs(TL(["首页", "历史财务", "盈利预测与折现法", "市盈率法", "蒙特卡洛模拟", "导出 Excel"]))
+tabs = st.tabs(TL(["首页", "历史财务", "盈利预测与折现法", "蒙特卡洛模拟", "导出 Excel"]))
 
 # ═══════════════ 蒙特卡洛（首页要用，先算）
-with tabs[4]:
+with tabs[3]:
     with st.expander(T("蒙特卡洛在做什么？"), expanded=False):
         st.markdown(T("MC_EXPLAIN"))
 
@@ -423,9 +416,11 @@ with tabs[0]:
                 delta_color="normal" if is_en() else "inverse", border=True)
     k[1].metric(T("总市值（亿元）"), fmt(q["mcap_yi"]), border=True)
     k[2].metric(T("折现法（元/股）"), fmt(D["每股价值"]), up(D["每股价值"]), delta_color="off", border=True)
-    k[3].metric(T("市盈率法（元/股）"), fmt(P["每股价值"]), up(P["每股价值"]), delta_color="off", border=True)
-    k[4].metric(T("蒙特卡洛中位数（元/股）"), fmt(ps_pct["P50"]), border=True)
-    k[4].caption(f"P5–P95  {ps_pct['P5']:.1f} – {ps_pct['P95']:.1f}")
+    k[3].metric(T("蒙特卡洛中位数（元/股）"), fmt(ps_pct["P50"]), border=True)
+    k[3].caption(f"P5–P95  {ps_pct['P5']:.1f} – {ps_pct['P95']:.1f}")
+    k[4].metric(T("现价隐含折现率"), f"{iw:.2f}%" if iw == iw else "—", border=True,
+                help=T("IW_HELP"))
+    k[4].caption(T("模型折现率 {w:.2f}%", w=W))
 
     left, right = st.columns([2, 1])
     with left:
@@ -437,10 +432,8 @@ with tabs[0]:
             x0, x1 = p1.index[0], p1.index[-1]
             fp.add_shape(type="rect", x0=x0, x1=x1, y0=ps_pct["P5"], y1=ps_pct["P95"],
                          fillcolor=LIGHT, opacity=0.45, line_width=0, layer="below")
-            for v_, lab_, dash_ in ((D["每股价值"], T("折现法"), "dash"),
-                                    (P["每股价值"], T("市盈率法"), "dot")):
-                fp.add_hline(y=v_, line_dash=dash_, line_color=GREY,
-                             annotation_text=f"{lab_} {v_:.2f}", annotation_position="top left")
+            fp.add_hline(y=D["每股价值"], line_dash="dash", line_color=GREY,
+                         annotation_text=f"{T('折现法')} {D['每股价值']:.2f}", annotation_position="top left")
             fp.add_annotation(x=x1, y=ps_pct["P95"], text=T("蒙特卡洛 P5–P95"), showarrow=False,
                               xanchor="right", yanchor="bottom", font=dict(size=11, color=GREY))
         fp.update_layout(**{**LAYOUT, "height": 360}, title=T("近一年股价与估值"), showlegend=False,
@@ -449,7 +442,6 @@ with tabs[0]:
     with right:
         st.markdown("#### " + T("关键指标"))
         kv = [(T("市盈率 TTM"), f"{fmt(pe_ttm, 1)}x"),
-              (T("可比公司市盈率中位数"), f"{fmt(comps_med, 1)}x"),
               (T("市净率"), f"{fmt(q.get('pb'), 2)}x"),
               (T("52周区间（元）"), f"{fmt(lo52)} – {fmt(hi52)}"),
               (T("贝塔（100周）"), fmt(cd["beta"]["beta"]) if cd.get("beta") else "—"),
@@ -458,7 +450,7 @@ with tabs[0]:
               (T("永续增长率"), f"{A.g_term:.2f}%"),
               (T("终值占企业价值"), f"{D['终值占比%']:.1f}%"),
               (T("每股净现金（元）"), fmt(ncd["净现金"] / shares_wan)),
-              (T("目标市盈率"), f"{A.target_pe:.1f}x")]
+              (T("现价隐含折现率"), f"{iw:.2f}%" if iw == iw else "—")]
         st.dataframe(pd.DataFrame(kv, columns=[T("指标"), T("数值")]), hide_index=True,
                      width="stretch", height=36 * (len(kv) + 1) + 3)
 
@@ -468,9 +460,7 @@ with tabs[0]:
         if hi52 == hi52:
             bars.append((T("52周股价区间"), lo52, hi52))
         bars += [(T("折现法敏感性区间"), float(np.nanmin(sens.values)), float(np.nanmax(sens.values))),
-                 (T("蒙特卡洛 P5–P95"), ps_pct["P5"], ps_pct["P95"]),
-                 (T("市盈率法（目标倍数±20%）"), float(P["网格"]["对应每股（元）"].min()),
-                  float(P["网格"]["对应每股（元）"].max()))]
+                 (T("蒙特卡洛 P5–P95"), ps_pct["P5"], ps_pct["P95"])]
         ff = go.Figure()
         for i, (lab, lo, hi) in enumerate(bars):
             ff.add_trace(go.Bar(y=[lab], x=[hi - lo], base=[lo], orientation="h",
@@ -501,13 +491,12 @@ with tabs[0]:
     st.markdown(T(
         "- **折现法**：折现率 {w:.2f}%（股权成本 {ke:.2f}%，贝塔 {b:.2f}），永续增长率 {g:.2f}%，"
         "得到每股 {v:.2f} 元；终值占企业价值 {tv:.1f}%。其中净现金贡献 {nc:.2f} 元/股，占每股价值的 {ncp:.0%}。\n"
-        "- **市盈率法**：{y}年预测归母净利润 {np_:.2f} 亿元、每股收益 {eps:.2f} 元，给予 {pe:.1f} 倍，得到每股 {pv:.2f} 元。\n"
+        "- **现价隐含折现率**：要让折现法结果等于现价 {px:.2f} 元，折现率需为 {iw:.2f}%，模型用的是 {w:.2f}%。\n"
         "- **蒙特卡洛**：{n:,} 次模拟（参数来源：{src}），折现法每股价值中位数 {p50:.2f} 元，"
         "90% 的结果落在 {p5:.2f}–{p95:.2f} 元。",
         w=W, ke=wc["股权成本"], b=A.beta, g=A.g_term, v=D["每股价值"], tv=D["终值占比%"],
         nc=ncd["净现金"] / shares_wan, ncp=ncd["净现金"] / shares_wan / D["每股价值"],
-        y=base_year + 1, np_=P["预测归母净利润"] / 1e4, npm=P["预测归母净利润"] / 100, eps=P["预测每股收益"], pe=A.target_pe,
-        pv=P["每股价值"], n=sims, src=emp["方法"], p50=ps_pct["P50"], p5=ps_pct["P5"], p95=ps_pct["P95"]))
+        px=q["price"], iw=iw, n=sims, src=emp["方法"], p50=ps_pct["P50"], p5=ps_pct["P5"], p95=ps_pct["P95"]))
     if W - A.g_term < 4:
         st.warning(T("折现率 {w:.2f}% 与永续增长率 {g:.2f}% 只差 {d:.2f} 个百分点，终值被大幅放大，折现法结果不可靠。",
                      w=W, g=A.g_term, d=W - A.g_term))
@@ -641,65 +630,22 @@ with tabs[2]:
         lambda s: ["background-color:#e6e6e6;font-weight:600" if (s.name == base_r and c_ == base_c)
                    else "" for c_ in s.index], axis=1), width="stretch")
 
-# ═══════════════ 市盈率法
-with tabs[3]:
-    st.markdown("#### " + T("可比公司"))
-    st.caption(T("来源：{s}。勾选「纳入」决定是否参与统计；市盈率(TTM) 不在 0–200 倍区间的样本自动剔除。",
-                 s=tr_msg(cd.get("peer_source") or "手动输入")))
-    comps = cd.get("comps")
-    if mode == "live":
-        codes_txt = st.text_input(T("可比公司代码（逗号分隔，可增删后点刷新）"),
-                                  value=",".join(cd.get("peers") or []), key="peer_codes")
-        if st.button(T("刷新可比公司")):
-            try:
-                comps = data.fetch_peer_quotes([c_.strip() for c_ in codes_txt.split(",")])
-                cd["comps"], cd["peers"] = comps, [c_.strip() for c_ in codes_txt.split(",")]
-                cd["peer_source"] = "手动输入"
-                st.rerun()
-            except Exception as e:  # noqa: BLE001
-                st.error(T("获取失败：{e}", e=tr_msg(str(e))))
-    if comps is not None and len(comps):
-        ed = comps.copy()
-        ed.insert(0, "纳入", True)
-        ed = st.data_editor(ed, hide_index=True, width="stretch", key="comps_editor",
-                            disabled=[c_ for c_ in ed.columns if c_ != "纳入"],
-                            column_config={c_: st.column_config.Column(T(c_)) for c_ in ed.columns} |
-                            {"总市值(亿元)": st.column_config.NumberColumn(T("总市值(亿元)"), format="%.1f")})
-        stats = M.comps_stats(ed[ed["纳入"]])
-        s1, s2, s3 = st.columns(3)
-        s1.metric(T("市盈率(TTM) 中位数"), T("{v:.1f} 倍", v=stats["中位数"]))
-        s2.metric(T("平均数"), T("{v:.1f} 倍", v=stats["平均数"]))
-        s3.metric(T("有效样本"), T("{n} 家", n=stats["有效样本"]))
-        s3.caption(T("剔除 {n} 家", n=stats["剔除"]))
-        st.markdown("<div class='note'>" + T(
-            "本公司市盈率 TTM {pe:.1f} 倍，较可比中位数 {d:+.0%}。目标市盈率在左侧「市盈率法」中设置，默认取中位数。",
-            pe=pe_ttm, d=pe_ttm / stats["中位数"] - 1) + "</div>", unsafe_allow_html=True)
-    else:
-        st.info(T("暂无可比公司数据，请在左侧手动设定目标市盈率。"))
-
-    st.markdown("#### " + T("测算"))
-    st.markdown("<div class='formula'>" + T(
-        "{y}年预测归母净利润　{np_} 万元<br>"
-        "÷ 总股本 {sh} 万股 = 每股收益 {eps:.4f} 元<br>"
-        "× 目标市盈率 {pe:.1f} 倍 = <b>每股价值 {v:.2f} 元</b>",
-        y=base_year + 1, np_=fmt(P["预测归母净利润"]), sh=fmt(shares_wan), eps=P["预测每股收益"],
-        pe=A.target_pe, v=P["每股价值"]) + "</div>", unsafe_allow_html=True)
-    g = P["网格"].copy()
-    g["较现价"] = g["对应每股（元）"] / q["price"] - 1
-    fmts = {"给予市盈率（倍）": "{:.1f}", "对应市值（亿元）": "{:.2f}", "对应每股（元）": "{:.2f}", "较现价": "{:+.1%}"}
-    g.columns = TL(g.columns)
-    st.dataframe(g.style.format({T(k_): v_ for k_, v_ in fmts.items()}), hide_index=True, width="stretch")
-
 # ═══════════════ 导出
-with tabs[5]:
+with tabs[4]:
     st.markdown("#### " + T("导出估值模型"))
-    st.markdown(T("Excel 中的预测、折现法、敏感性、市盈率法均为**活公式**：蓝色为输入，改动「假设」表任一蓝色单元格，"
+    st.markdown(T("Excel 中的预测、折现法、敏感性均为**活公式**：蓝色为输入，改动「假设」表任一蓝色单元格，"
                   "全部结果自动重算。蒙特卡洛结果以数值形式附上。当前语言决定 Excel 的语言。"))
     xls = export.build_workbook({**cd, "quote": q}, A, dict(
-        wacc=wc, dcf=D, pe=P, mc_ps=ps_pct, mc_np=np_pct, emp=emp, y1_scale=y1_scale, sims=sims,
+        wacc=wc, dcf=D, mc_ps=ps_pct, mc_np=np_pct, emp=emp, y1_scale=y1_scale, sims=sims,
         mc_sg=MC["增速σ"], mc_sm=MC["利润率σ"]))
     st.download_button(T("下载 Excel 估值模型"), xls,
                        file_name=T("{n}_{c}_估值模型.xlsx", n=q["name"], c=q["code"]),
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       width="stretch")
+    st.markdown("#### " + T("空白 Excel 模板"))
+    st.markdown(T("TEMPLATE_NOTE"))
+    st.download_button(T("下载空白折现法模板（中文）"), template.build_template(),
+                       file_name="DCF估值模板_空白.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        width="stretch")
     st.markdown("#### " + T("方法与数据说明"))

@@ -3,7 +3,7 @@
 
 数据来源
 - 三张报表（单季数据由累计报表相减得到）、个股周线、指数日线、国债收益率：akshare（东方财富 / 新浪公开接口）
-- 实时行情、行业板块成分：东方财富行情接口
+- 实时行情：东方财富行情接口
 
 所有金额统一换算为「万元」，每股数据为「元」。
 """
@@ -22,7 +22,6 @@ warnings.filterwarnings("ignore")
 
 UA = {"User-Agent": "Mozilla/5.0"}
 QUOTE_URL = "https://push2delay.eastmoney.com/api/qt/stock/get"
-CLIST_URL = "https://push2delay.eastmoney.com/api/qt/clist/get"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 # 演示快照放在 demo/ 下；若不存在（如经网页上传时子文件夹丢失），退回程序所在目录
 DEMO_DIR = os.path.join(_HERE, "demo") if os.path.isdir(os.path.join(_HERE, "demo")) else _HERE
@@ -138,67 +137,6 @@ def fetch_rf() -> float:
     df = retry(lambda: ak.bond_zh_us_rate(start_date=start))
     s = pd.to_numeric(df["中国国债收益率10年"], errors="coerce").dropna()
     return float(s.iloc[-1])
-
-
-SLIST_URL = "https://push2delay.eastmoney.com/api/qt/slist/get"
-ULIST_URL = "https://push2delay.eastmoney.com/api/qt/ulist.np/get"
-
-# 自动获取失败时的默认可比公司（取自 Wind 全球可比公司与产业链中心）
-DEFAULT_PEERS = {
-    "688230": ["300373", "603290", "300623", "605111", "688261", "688711",
-               "300046", "688689", "688508", "688601", "600360", "300671"],
-}
-
-
-def _secid(code: str) -> str:
-    return f"{market_of(code)[1]}.{code}"
-
-
-def fetch_boards(code: str) -> list[tuple[str, str]]:
-    """个股所属板块，东财按「细分行业 → 大类行业 → 概念/地域」排序"""
-    p = {"spt": 3, "fltt": 2, "invt": 2, "secid": _secid(code), "fields": "f12,f14",
-         "pi": 0, "po": 1, "np": 1, "pz": 50}
-    j = retry(lambda: requests.get(SLIST_URL, params=p, headers=UA, timeout=10).json())
-    return [(d["f12"], d["f14"]) for d in (j.get("data") or {}).get("diff") or []]
-
-
-def fetch_board_members(bk: str) -> list[str]:
-    rows = []
-    for host in ("push2delay", "push2"):
-        try:
-            for pn in range(1, 6):
-                p = {"pn": pn, "pz": 100, "po": 1, "np": 1, "fltt": 2, "invt": 2,
-                     "fid": "f20", "fs": f"b:{bk}", "fields": "f12"}
-                j = requests.get(f"https://{host}.eastmoney.com/api/qt/clist/get",
-                                 params=p, headers=UA, timeout=10).json()
-                d = (j.get("data") or {}).get("diff") or []
-                rows += [x["f12"] for x in d]
-                if len(d) < 100:
-                    break
-            if rows:
-                return rows
-        except Exception:  # noqa: BLE001
-            continue
-    raise RuntimeError("板块成分接口暂不可用")
-
-
-def fetch_peer_quotes(codes: list[str]) -> pd.DataFrame:
-    codes = [c.strip() for c in codes if c.strip()]
-    if not codes:
-        return pd.DataFrame()
-    p = {"fltt": 2, "invt": 2, "secids": ",".join(_secid(c) for c in codes),
-         "fields": "f12,f14,f2,f9,f20,f23,f115"}
-    j = retry(lambda: requests.get(ULIST_URL, params=p, headers=UA, timeout=10).json())
-    df = pd.DataFrame((j.get("data") or {}).get("diff") or [])
-    if df.empty:
-        return df
-    df = df.rename(columns={"f12": "代码", "f14": "名称", "f2": "股价", "f9": "市盈率(动)",
-                            "f20": "总市值", "f23": "市净率", "f115": "市盈率(TTM)"})
-    for c in ["股价", "市盈率(动)", "总市值", "市净率", "市盈率(TTM)"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["总市值(亿元)"] = df["总市值"] / 1e8
-    return df.drop(columns=["总市值"])[["代码", "名称", "股价", "市盈率(TTM)",
-                                       "市盈率(动)", "市净率", "总市值(亿元)"]]
 
 
 # ─────────────────────────── 整理
@@ -395,35 +333,6 @@ def load_company(code: str) -> dict:
         cd["rf"] = fetch_rf(); status["10年国债"] = "ok"
     except Exception as e:
         cd["rf"] = None; status["10年国债"] = f"失败：{e}"
-    # 可比公司：先取所属板块，自动拉成分并按市值筛选；失败则用默认清单
-    cd["boards"], cd["peer_source"], peers = [], "", []
-    try:
-        cd["boards"] = fetch_boards(code)
-    except Exception as e:  # noqa: BLE001
-        status["所属板块"] = f"失败：{e}"
-    if cd["boards"]:
-        bk, bname = cd["boards"][0]
-        try:
-            members = [m for m in fetch_board_members(bk) if m != code]
-            q = fetch_peer_quotes(members[:300])
-            mc = (cd["quote"] or {}).get("mcap_yi") or 0
-            if mc and not q.empty:
-                band = q[(q["总市值(亿元)"] >= mc * 0.25) & (q["总市值(亿元)"] <= mc * 4)]
-                q = band if len(band) >= 5 else q
-            peers = q.sort_values("总市值(亿元)", ascending=False)["代码"].head(15).tolist()
-            cd["peer_source"] = f"东财「{bname}」板块成分，按市值 0.25–4 倍筛选"
-        except Exception as e:  # noqa: BLE001
-            status["板块成分"] = f"不可用，改用默认清单（{e}）"
-    if not peers:
-        peers = DEFAULT_PEERS.get(code, [])
-        if peers:
-            cd["peer_source"] = "默认清单（Wind 全球可比公司）"
-    cd["peers"] = peers
-    try:
-        cd["comps"] = fetch_peer_quotes(peers) if peers else None
-        status["可比公司"] = "ok" if peers else "无默认清单，请手动输入"
-    except Exception as e:  # noqa: BLE001
-        cd["comps"] = None; status["可比公司"] = f"失败：{e}"
 
     # 若行情失败，用报表兜底
     if cd["quote"] is None:

@@ -6,7 +6,12 @@ from __future__ import annotations
 import re
 
 
+FORCE: str | None = None   # 临时固定语言（如 Excel 模板只出中文版）
+
+
 def is_en() -> bool:
+    if FORCE is not None:
+        return FORCE == "en"
     try:
         import streamlit as st
         return st.session_state.get("lang") == "English"
@@ -76,6 +81,10 @@ ZH = {
                     "用于剔除闲置资金对回报率的稀释。"),
     "FCFF_NOTE": ("NOPAT =（核心经营利润 + 投资收益及其他 × 计入比例）×（1 − 税率）；"
                   "FCFF = NOPAT + 折旧摊销 − 资本开支 − 营运资金增加；年末折现。"),
+    "IW_HELP": ("反向折现：其他假设不变，求使折现法每股价值恰好等于现价的折现率。"
+                "它比模型折现率低得越多，说明市场定价隐含的风险越低或长期增长越高。"),
+    "TEMPLATE_NOTE": ("不依赖网页的折现法模板：在「历史数据」表填入 5 年报表科目（可从 Wind 或年报摘取），"
+                      "历史指标和参考假设自动算出；在「假设」表填写假设后，折现法与敏感性自动计算。适合非上市公司或网页取不到数据的情况。"),
     "METHOD_NOTES": (
         "- **数据**：三张报表、单季利润表、股价、沪深300、10年期国债来自 akshare（东方财富、新浪公开接口）；"
         "实时行情与可比公司来自东方财富行情接口。非官方授权数据，接口可能随网站改版失效。\n"
@@ -195,14 +204,19 @@ EN = {
     "归母净利润（亿元）": "Net profit to parent (RMB 100m)",
     "营收与利润：历史与预测（亿元）": "Revenue & profit: history and forecast (RMB 100m)",
     "结果说明": "Summary",
-    "- **折现法**：折现率 {w:.2f}%（股权成本 {ke:.2f}%，贝塔 {b:.2f}），永续增长率 {g:.2f}%，得到每股 {v:.2f} 元；终值占企业价值 {tv:.1f}%。其中净现金贡献 {nc:.2f} 元/股，占每股价值的 {ncp:.0%}。\n- **市盈率法**：{y}年预测归母净利润 {np_:.2f} 亿元、每股收益 {eps:.2f} 元，给予 {pe:.1f} 倍，得到每股 {pv:.2f} 元。\n- **蒙特卡洛**：{n:,} 次模拟（参数来源：{src}），折现法每股价值中位数 {p50:.2f} 元，90% 的结果落在 {p5:.2f}–{p95:.2f} 元。":
+    "- **折现法**：折现率 {w:.2f}%（股权成本 {ke:.2f}%，贝塔 {b:.2f}），永续增长率 {g:.2f}%，得到每股 {v:.2f} 元；终值占企业价值 {tv:.1f}%。其中净现金贡献 {nc:.2f} 元/股，占每股价值的 {ncp:.0%}。\n- **现价隐含折现率**：要让折现法结果等于现价 {px:.2f} 元，折现率需为 {iw:.2f}%，模型用的是 {w:.2f}%。\n- **蒙特卡洛**：{n:,} 次模拟（参数来源：{src}），折现法每股价值中位数 {p50:.2f} 元，90% 的结果落在 {p5:.2f}–{p95:.2f} 元。":
         ("- **DCF**: WACC {w:.2f}% (cost of equity {ke:.2f}%, beta {b:.2f}), terminal growth {g:.2f}%, giving "
          "RMB {v:.2f} per share; terminal value is {tv:.1f}% of EV. Net cash contributes RMB {nc:.2f} per share, "
          "{ncp:.0%} of the value.\n"
-         "- **P/E method**: {y}E net profit to parent RMB {npm:,.0f}m, EPS RMB {eps:.2f}; at {pe:.1f}x this gives "
-         "RMB {pv:.2f} per share.\n"
+         "- **Implied discount rate**: for the DCF to equal the current price of RMB {px:.2f}, the discount rate "
+         "would need to be {iw:.2f}%; the model uses {w:.2f}%.\n"
          "- **Monte Carlo**: {n:,} simulations (parameters: {src}); median DCF value RMB {p50:.2f} per share, with 90% "
          "of outcomes between RMB {p5:.2f} and {p95:.2f}."),
+    "现价隐含折现率": "Implied discount rate",
+    "模型折现率 {w:.2f}%": "Model WACC {w:.2f}%",
+    "IW_HELP": ("Reverse DCF: keep every other assumption unchanged and solve for the discount rate at which the DCF "
+                "value per share equals the current price. The further it is below the model WACC, the more the market "
+                "is pricing in lower risk or higher long-term growth."),
     "：原始值 {raw:.2f}（R² {r2:.2f}），Blume 调整后 {adj:.2f}（= 0.67 × 原始 + 0.33）":
         ": raw {raw:.2f} (R² {r2:.2f}); Blume-adjusted {adj:.2f} (= 0.67 × raw + 0.33)",
     "折现率 {w:.2f}% 与永续增长率 {g:.2f}% 只差 {d:.2f} 个百分点，终值被大幅放大，折现法结果不可靠。":
@@ -401,9 +415,15 @@ EN = {
 
     # ── 导出
     "导出估值模型": "Export the valuation model",
-    "Excel 中的预测、折现法、敏感性、市盈率法均为**活公式**：蓝色为输入，改动「假设」表任一蓝色单元格，全部结果自动重算。蒙特卡洛结果以数值形式附上。当前语言决定 Excel 的语言。":
-        "The forecast, DCF, sensitivity and P/E sheets in Excel are **live formulas**: blue cells are inputs, and changing any blue cell on the Assumptions sheet recalculates everything. Monte Carlo results are included as values. The Excel file uses the current language.",
+    "Excel 中的预测、折现法、敏感性均为**活公式**：蓝色为输入，改动「假设」表任一蓝色单元格，全部结果自动重算。蒙特卡洛结果以数值形式附上。当前语言决定 Excel 的语言。":
+        "The forecast, DCF and sensitivity sheets in Excel are **live formulas**: blue cells are inputs, and changing any blue cell on the Assumptions sheet recalculates everything. Monte Carlo results are included as values. The Excel file uses the current language.",
     "下载 Excel 估值模型": "Download the Excel model",
+    "空白 Excel 模板": "Blank Excel template",
+    "下载空白折现法模板（中文）": "Download the blank DCF template (Chinese)",
+    "TEMPLATE_NOTE": ("A stand-alone DCF template: enter five years of statement items on the History sheet (from Wind or "
+                      "annual reports) and historical ratios and reference assumptions are calculated automatically; fill in "
+                      "the Assumptions sheet and the DCF and sensitivity update. Useful for unlisted companies or when the "
+                      "web data is unavailable."),
     "{n}_{c}_估值模型.xlsx": "{c}_valuation_model.xlsx",
     "方法与数据说明": "Method and data notes",
     "METHOD_NOTES": (
@@ -426,8 +446,8 @@ EN = {
     "蓝色字体为输入，黑色字体为公式。改动「假设」表中任一蓝色单元格，全部结果自动重算。":
         "Blue = input, black = formula. Change any blue cell on the Assumptions sheet and everything recalculates.",
     "工作表": "Sheets",
-    "假设 → 预测与折现法 → 敏感性 → 市盈率法；历史数据与蒙特卡洛结果为数值。":
-        "Assumptions → Forecast & DCF → Sensitivity → P/E method; History and Monte Carlo are values.",
+    "假设 → 预测与折现法 → 敏感性；历史数据与蒙特卡洛结果为数值。":
+        "Assumptions → Forecast & DCF → Sensitivity; History and Monte Carlo are values.",
     "模型结构": "Model structure",
     "营业总收入 × 核心经营利润率 = 核心经营利润；+ 投资收益及其他 = 利润总额；× (1 − 有效税率) × (1 − 少数股东占比) = 归母净利润。":
         "Total revenue × core operating margin = core operating profit; + investment income & other = pre-tax profit; × (1 − effective tax) × (1 − minority share) = net profit to parent.",

@@ -42,7 +42,6 @@ class Assumptions:
     add_cash: bool = True
     add_fin: bool = True
     # 市盈率法
-    target_pe: float = 40.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -119,26 +118,18 @@ def sensitivity(fc: pd.DataFrame, nc: float, shares_wan: float, w0: float, g0: f
     return out
 
 
-# ─────────────────────────── 市盈率法
-def pe_valuation(fc: pd.DataFrame, shares_wan: float, target_pe: float,
-                 steps=(-0.2, -0.1, 0.0, 0.1, 0.2)) -> dict:
-    np1 = float(fc["归母净利润"].iloc[0])
-    eps = np1 / shares_wan
-    grid = pd.DataFrame({
-        "给予市盈率（倍）": [target_pe * (1 + s) for s in steps],
-    })
-    grid["对应市值（亿元）"] = grid["给予市盈率（倍）"] * np1 / 1e4
-    grid["对应每股（元）"] = grid["给予市盈率（倍）"] * eps
-    return {"预测归母净利润": np1, "预测每股收益": eps,
-            "每股价值": target_pe * eps, "网格": grid}
-
-
-def comps_stats(comps: pd.DataFrame, col: str = "市盈率(TTM)", lo: float = 0, hi: float = 200) -> dict:
-    s = pd.to_numeric(comps[col], errors="coerce")
-    valid = s[(s > lo) & (s < hi)]
-    return {"中位数": float(valid.median()) if len(valid) else np.nan,
-            "平均数": float(valid.mean()) if len(valid) else np.nan,
-            "有效样本": int(len(valid)), "剔除": int(len(s) - len(valid))}
+# ─────────────────────────── 反推：现价隐含的折现率
+def implied_wacc(fc: pd.DataFrame, g_term: float, nc: float, shares_wan: float, price: float,
+                 lo: float | None = None, hi: float = 60.0) -> float:
+    """二分法求使折现法每股价值等于现价的折现率（%）；无解时返回 nan。"""
+    lo = g_term + 0.05 if lo is None else lo
+    f = lambda w: dcf(fc, w, g_term, nc, shares_wan)["每股价值"] - price
+    if f(lo) < 0 or f(hi) > 0:
+        return float("nan")
+    for _ in range(80):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if f(mid) > 0 else (lo, mid)
+    return (lo + hi) / 2
 
 
 # ─────────────────────────── 历史检验与杜邦
