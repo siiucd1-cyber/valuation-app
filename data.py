@@ -23,7 +23,9 @@ warnings.filterwarnings("ignore")
 UA = {"User-Agent": "Mozilla/5.0"}
 QUOTE_URL = "https://push2delay.eastmoney.com/api/qt/stock/get"
 CLIST_URL = "https://push2delay.eastmoney.com/api/qt/clist/get"
-DEMO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# 演示快照放在 demo/ 下；若不存在（如经网页上传时子文件夹丢失），退回程序所在目录
+DEMO_DIR = os.path.join(_HERE, "demo") if os.path.isdir(os.path.join(_HERE, "demo")) else _HERE
 WAN = 1e4
 
 
@@ -473,4 +475,4 @@ def load_snapshot(path: str) -> dict:
 def demo_codes() -> list[str]:
     if not os.path.isdir(DEMO_DIR):
         return []
-    return sorted(f[:-5] for f in os.listdir(DEMO_DIR) if f.endswith(".json"))
+    return sorted(f[:-5] for f in os.listdir(DEMO_DIR) if f.endswith(".json") and f[:-5].isdigit())
