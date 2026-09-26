@@ -57,6 +57,28 @@ def tr_msg(s: str) -> str:
 
 
 ZH = {
+    "FCFF_NEG": ("预测期最后一年的自由现金流为负，终值也随之为负，折现法结果没有意义。常见原因是公司处于扩张期："
+                 "资本开支 / 营收（当前 {cx:.1f}%）远高于折旧摊销 / 营收（{da:.1f}%），而模型把这个比例延续到了永续期。"
+                 "可在左侧「资本开支与营运资金」中把资本开支调到接近折旧的维持性水平后再看。"),
+    "MODE_HELP": ("实时数据：输入股票代码，从东方财富、新浪公开接口拉取；演示数据：预存快照，无网络也能打开；"
+                  "上传年报 PDF：从年报中自动抽取合并报表，适合接口取不到数据或想用原始披露数据时。"),
+    "PDF_UP_HELP": "上传同一家公司的 1–6 份年度报告（沪深交易所标准格式）。多份年报可拼成更长的历史序列。",
+    "PRICE_HELP": ("上市公司识别到股票代码后会自动取实时股价，这里填 0 即可；"
+                   "非上市公司或想用其他价格时，填入每股价格（如最近一轮融资价格）。"),
+    "PDF_INTRO": (
+        "在左侧上传一份或多份**年度报告 PDF**，程序会：\n\n"
+        "1. 找到「合并资产负债表、合并利润表、合并现金流量表」和「现金流量表补充资料」，按表格结构抽取 25 个科目"
+        "（营业总收入、营业总成本、利润总额、所得税、归母净利润、折旧摊销、资本开支、应收账款、存货、借款等），"
+        "自动跳过母公司报表；\n"
+        "2. 每份年报取本年和上年两期；多份年报拼接时，某一年优先用**次年年报里的上年数**（已按追溯调整重述）；\n"
+        "3. 识别到股票代码时，自动获取实时股价、贝塔和国债利率；\n"
+        "4. 抽取结果可在页面上逐项核对、修改，折现法、蒙特卡洛、敏感性分析全部按修改后的数据重算；"
+        "在「导出 Excel」页签可下载**已填好数据的折现法模板**。\n\n"
+        "解析一份年报约 10–20 秒。用金开新能（600821）2016–2021 年 6 份年报测试，"
+        "除 2021 年数据此后被追溯调整、旧准则下金融资产科目口径不同外，其余 125 项与东方财富数据逐项一致。"),
+    "PDF_MERGE_NOTE": ("每份年报包含本年和上年两期。同一年度优先采用次年年报中的上年数（已按追溯调整重述，与后续年度口径一致），"
+                       "没有次年年报时用该年年报的本年数。表中数据可以直接修改，修改后全部估值即时重算。"),
+    "TEMPLATE_FILLED_HELP": "把当前公司最近 5 年的数据填入模板的「历史数据」表，假设表填入当前左侧的假设，打开即可看到与网页一致的结果。",
     "TORNADO_NOTE": ("左图每次只动一个假设（其余不变），上下各变动一个标准差或给定幅度，条越长说明估值对它越敏感；"
                      "营收增速、利润率、折现率的变动幅度取上方不确定性参数。右图来自蒙特卡洛：所有不确定因素同时随机变化时，"
                      "用每个输入与每股价值的秩相关系数平方分解估值波动的来源。"),
@@ -93,8 +115,8 @@ ZH = {
                   "FCFF = NOPAT + 折旧摊销 − 资本开支 − 营运资金增加；年末折现。"),
     "IW_HELP": ("反向折现：其他假设不变，求使折现法每股价值恰好等于现价的折现率。"
                 "它比模型折现率低得越多，说明市场定价隐含的风险越低或长期增长越高。"),
-    "TEMPLATE_NOTE": ("不依赖网页的折现法模板：在「历史数据」表填入 5 年报表科目（可从 Wind 或年报摘取），"
-                      "历史指标和参考假设自动算出；在「假设」表填写假设后，折现法与敏感性自动计算。适合非上市公司或网页取不到数据的情况。"),
+    "TEMPLATE_NOTE": ("不依赖网页的折现法模板：「历史数据」表放 5 年报表科目，历史指标和参考假设自动算出；"
+                      "「假设」表填写假设后，折现法与敏感性自动计算。左边按钮下载已填好当前公司数据与假设的版本，右边是空白版。"),
     "METHOD_NOTES": (
         "- **数据**：三张报表、单季利润表、股价、沪深300、10年期国债来自 akshare（东方财富、新浪公开接口）；"
         "实时行情与可比公司来自东方财富行情接口。非官方授权数据，接口可能随网站改版失效。\n"
@@ -434,10 +456,10 @@ EN = {
     "下载 Excel 估值模型": "Download the Excel model",
     "空白 Excel 模板": "Blank Excel template",
     "下载空白折现法模板（中文）": "Download the blank DCF template (Chinese)",
-    "TEMPLATE_NOTE": ("A stand-alone DCF template: enter five years of statement items on the History sheet (from Wind or "
-                      "annual reports) and historical ratios and reference assumptions are calculated automatically; fill in "
-                      "the Assumptions sheet and the DCF and sensitivity update. Useful for unlisted companies or when the "
-                      "web data is unavailable."),
+    "TEMPLATE_NOTE": ("A stand-alone DCF template: the History sheet holds five years of statement items, from which historical "
+                      "ratios and reference assumptions are calculated; fill in the Assumptions sheet and the DCF and sensitivity "
+                      "update. The left button gives a version pre-filled with this company and the current assumptions; the right "
+                      "one is blank."),
     "{n}_{c}_估值模型.xlsx": "{c}_valuation_model.xlsx",
     "方法与数据说明": "Method and data notes",
     "METHOD_NOTES": (
@@ -509,6 +531,65 @@ EN = {
     "BRIDGE_NOTE": ("Left: starting from the current assumptions and switching step by step to more optimistic ones, where "
                     "does value per share catch up with the price? Right: the value one parameter would need, all else "
                     "unchanged. The more extreme the required value, the harder the price's implied expectations are to meet."),
+    # ── PDF 上传
+    "上传年报 PDF": "Upload annual report PDF",
+    "MODE_HELP": ("Live: enter a stock code and pull data from Eastmoney and Sina public endpoints. Demo: a saved snapshot "
+                  "that works offline. Upload annual report PDF: extract the consolidated statements from annual reports, "
+                  "useful when the endpoints fail or you want the original disclosures."),
+    "上传年度报告 PDF（可多份）": "Upload annual report PDFs (several allowed)",
+    "PDF_UP_HELP": "Upload 1–6 annual reports of the same company (standard SSE/SZSE format). Several reports give a longer history.",
+    "识别到股票代码时，获取实时股价与贝塔": "Fetch live price and beta when a stock code is found",
+    "每股价格（元，0 = 自动）": "Price per share (RMB, 0 = automatic)",
+    "PRICE_HELP": ("For listed companies the live price is fetched once the stock code is recognised, so leave 0. For unlisted "
+                   "companies or a different price, enter a price per share (e.g. the latest funding round)."),
+    "上传年报 PDF，自动抽取报表并估值": "Upload annual reports: automatic extraction and valuation",
+    "PDF_INTRO": (
+        "Upload one or more **annual report PDFs** on the left. The tool will:\n\n"
+        "1. Locate the consolidated balance sheet, income statement, cash flow statement and the cash-flow supplementary "
+        "note, and extract 25 line items by table structure (revenue, operating cost, pre-tax profit, tax, net profit, "
+        "D&A, capex, receivables, inventory, borrowings, etc.), skipping the parent-company statements;\n"
+        "2. Take the current and prior year from each report; when combining reports, a year's figures come preferably "
+        "from the **following year's report** (restated for retrospective adjustments);\n"
+        "3. Fetch the live price, beta and bond yield when a stock code is recognised;\n"
+        "4. Let you check and edit every extracted figure; DCF, Monte Carlo and sensitivity all recalculate on the edited "
+        "data, and the Export tab offers a **pre-filled DCF Excel template**.\n\n"
+        "Parsing takes about 10–20 s per report. Tested on six annual reports (2016–2021) of Gold Kai New Energy (600821): "
+        "apart from 2021 figures later restated and a legacy financial-asset line item, all 125 figures match Eastmoney exactly."),
+    "正在解析 {n}（{i}/{k}）……": "Parsing {n} ({i}/{k})…",
+    "以下文件未识别为年度报告，已跳过：{f}": "These files were not recognised as annual reports and were skipped: {f}",
+    "没有可用的年度报告。": "No usable annual report.",
+    "识别到股票代码 {c}，正在获取实时股价与贝塔……": "Stock code {c} recognised; fetching live price and beta…",
+    "年报解析结果（万元，可直接修改）": "Extracted figures (RMB 10k, editable)",
+    "文件": "File", "报告年度": "Report year", "公司": "Company", "资产负债表页码": "Balance sheet page",
+    "利润表页码": "Income statement page", "现金流量表页码": "Cash flow page", "补充资料页码": "Supplementary note page",
+    "提示": "Notes",
+    "PDF_MERGE_NOTE": ("Each report contains the current and prior year. A year's figures come preferably from the following "
+                       "year's report (restated, consistent with later years); otherwise from that year's own report. "
+                       "Edit any cell and the whole valuation recalculates."),
+    "未取得股价：请在左侧填写每股价格（非上市公司可填最近一轮融资价格）后继续。":
+        "No share price available: enter a price per share on the left (for unlisted companies, e.g. the latest funding round).",
+    "年报中未找到股本，无法计算每股价值。请在上方表格中补充「股本（万股）」。":
+        "Share capital was not found in the reports, so value per share cannot be computed. Add “Shares (10k)” in the table above.",
+    "年报 PDF": "Annual report PDF",
+    "财务数据来自上传的 {n} 份年报（{y0}–{y1}）；股价{p}。": "Financials from {n} uploaded annual report(s) ({y0}–{y1}); share price {p}.",
+    "为手动输入": "entered manually", "来自实时行情": "from the live quote",
+    "无股价数据（非上市公司或行情获取失败）": "No price history (unlisted company or quote unavailable)",
+    "Excel 模板": "Excel template",
+    "下载已填入本公司数据的模板（中文）": "Download the template filled with this company (Chinese)",
+    "TEMPLATE_FILLED_HELP": ("Fills the History sheet with this company's last five years and the Assumptions sheet with the "
+                             "current assumptions; the results match the web page."),
+    "股本（万股）": "Shares (10k)", "税金及附加": "Taxes and surcharges", "销售费用": "Selling expenses",
+    "管理费用": "Admin expenses", "财务费用": "Finance expenses", "营业利润": "Operating profit",
+    "固定资产": "Fixed assets", "固定资产折旧": "Depreciation of fixed assets", "使用权资产折旧": "Right-of-use depreciation",
+    "无形资产摊销": "Amortisation of intangibles", "长期待摊费用摊销": "Amortisation of long-term prepaid expenses",
+    "短期借款": "Short-term borrowings", "长期借款": "Long-term borrowings", "应付债券": "Bonds payable",
+    "一年内到期非流动负债": "Non-current liabilities due within one year", "应收账款": "Accounts receivable",
+    "存货": "Inventory", "应付账款": "Accounts payable", "营业收入": "Operating revenue", "营业成本": "Cost of sales",
+    "所得税": "Income tax", "净利润": "Net profit",
+    "FCFF_NEG": ("Free cash flow in the final forecast year is negative, so the terminal value is negative too and the DCF is "
+                 "not meaningful. A common cause is an expansion phase: capex / revenue ({cx:.1f}%) is far above D&A / "
+                 "revenue ({da:.1f}%), and the model carries that ratio into perpetuity. Lower capex towards a maintenance "
+                 "level close to D&A under “Capex & working capital” on the left."),
     # ── Excel
     "{n}（{c}）估值模型": "{n} ({c}) valuation model",
     "说明": "Notes",

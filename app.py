@@ -15,6 +15,7 @@ import streamlit as st
 import data
 import export
 import model as M
+import pdf_parser
 import template
 from i18n import T, TL, is_en, tr_msg
 
@@ -52,6 +53,16 @@ def fetch_live(code: str) -> dict:
 @st.cache_data(ttl=30, show_spinner=False)
 def live_quote(code: str) -> dict:
     return data.fetch_quote(code)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def parse_pdf(data_: bytes, name: str) -> dict:
+    return pdf_parser.parse_report(data_, name)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_market(code: str) -> dict:
+    return data.load_market(code)
 
 
 def fetch_demo(code: str) -> dict:
@@ -158,18 +169,62 @@ with st.sidebar:
              label_visibility="collapsed")
     st.markdown("## " + T("估值工作台"))
     st.caption(T("输入 A 股代码，自动拉取财报；左侧所有假设可调，结果即时重算。"))
-    mode = st.radio(T("数据来源"), ["live", "demo"], index=1 if ON_CLOUD else 0, horizontal=True,
-                    key="mode", format_func=lambda m: T("实时数据") if m == "live" else T("演示数据（离线）"),
-                    help=T("演示数据是预存的快照，无网络也能打开；实时数据从东方财富、新浪公开接口获取。"))
-    with st.form("pick"):
-        code_in = st.text_input(T("股票代码"), value=st.session_state.get("code", "688230"), max_chars=6)
-        go_btn = st.form_submit_button(T("加载"), width="stretch")
-    if mode == "demo" and data.demo_codes():
-        st.caption(T("可用演示代码：") + "、".join(data.demo_codes()))
+    MODES = {"live": "实时数据", "demo": "演示数据（离线）", "pdf": "上传年报 PDF"}
+    mode = st.radio(T("数据来源"), list(MODES), index=1 if ON_CLOUD else 0, key="mode",
+                    format_func=lambda m: T(MODES[m]), help=T("MODE_HELP"))
+    if mode == "pdf":
+        ups = st.file_uploader(T("上传年度报告 PDF（可多份）"), type="pdf", accept_multiple_files=True,
+                               key="pdf_files", help=T("PDF_UP_HELP"))
+        use_mkt = st.checkbox(T("识别到股票代码时，获取实时股价与贝塔"), True, key="pdf_mkt")
+        price_in = st.number_input(T("每股价格（元，0 = 自动）"), min_value=0.0, value=0.0, step=0.1,
+                                   key="pdf_price", help=T("PRICE_HELP"))
+        code_in, go_btn = st.session_state.get("code", ""), False
+    else:
+        with st.form("pick"):
+            code_in = st.text_input(T("股票代码"), value=st.session_state.get("code", "688230") or "688230",
+                                    max_chars=6)
+            go_btn = st.form_submit_button(T("加载"), width="stretch")
+        if mode == "demo" and data.demo_codes():
+            st.caption(T("可用演示代码：") + "、".join(data.demo_codes()))
 
-code = code_in.strip()
-key = f"{mode}|{code}"
-if go_btn or "cd" not in st.session_state or st.session_state.get("key") != key:
+code = str(code_in).strip()
+if mode == "pdf":
+    if not ups:
+        st.markdown("### " + T("上传年报 PDF，自动抽取报表并估值"))
+        st.markdown(T("PDF_INTRO"))
+        st.stop()
+    key = "pdf|" + "|".join(sorted(pdf_parser.file_key(f.getvalue()) for f in ups)) + f"|{use_mkt}"
+    if st.session_state.get("key") != key:
+        reps = []
+        bar = st.progress(0.0)
+        for i, f in enumerate(ups):
+            bar.progress(i / len(ups), text=T("正在解析 {n}（{i}/{k}）……", n=f.name, i=i + 1, k=len(ups)))
+            reps.append(parse_pdf(f.getvalue(), f.name))
+        bar.empty()
+        bad = [r["文件"] for r in reps if not r.get("年度")]
+        reps = sorted([r for r in reps if r.get("年度")], key=lambda r: r["年度"])
+        if bad:
+            st.warning(T("以下文件未识别为年度报告，已跳过：{f}", f="、".join(bad)))
+        if not reps:
+            st.error(T("没有可用的年度报告。")); st.stop()
+        raw, src = pdf_parser.merge_reports(reps)
+        code = reps[-1].get("公司代码") or ""
+        market = None
+        if use_mkt and code:
+            with st.spinner(T("识别到股票代码 {c}，正在获取实时股价与贝塔……", c=code)):
+                try:
+                    market = fetch_market(code)
+                except Exception:  # noqa: BLE001
+                    market = None
+        st.session_state.update(pdf_reports=reps, pdf_raw=raw, pdf_src=src, pdf_market=market,
+                                key=key, code=code)
+        st.session_state.pop("pdf_editor", None)
+        cd = pdf_parser.build_company(raw, reps, market, price_in or None)
+        st.session_state["cd"] = cd
+        if cd["quote"]["price"] == cd["quote"]["price"]:
+            reset_state(defaults_from(cd))
+elif go_btn or "cd" not in st.session_state or st.session_state.get("key") != f"{mode}|{code}":
+    key = f"{mode}|{code}"
     try:
         if mode == "demo":
             cd = fetch_demo(code)
@@ -185,6 +240,43 @@ if go_btn or "cd" not in st.session_state or st.session_state.get("key") != key:
             st.stop()
     st.session_state.update(cd=cd, key=key, code=code)
     reset_state(defaults_from(cd))
+
+if mode == "pdf":
+    # 解析结果可人工核对、修改；修改后整套估值即时按新数据重算
+    reps, raw0 = st.session_state["pdf_reports"], st.session_state["pdf_raw"]
+    with st.expander(T("年报解析结果（万元，可直接修改）"), expanded=False):
+        lab = {f: T(f) for f in raw0.columns}
+        grid = raw0.apply(pd.to_numeric, errors="coerce").T.astype(float)
+        grid.index = [lab[f] for f in grid.index]
+        grid.columns = [f"{y}A" for y in grid.columns]
+        ed = st.data_editor(grid, key="pdf_editor", width="stretch", height=36 * (len(grid) + 1) + 3,
+                            column_config={c: st.column_config.NumberColumn(format="%.2f") for c in grid.columns})
+        back = {v: k for k, v in lab.items()}
+        raw_ed = ed.copy()
+        raw_ed.index = [back.get(i, i) for i in raw_ed.index]
+        raw_ed = raw_ed.T
+        raw_ed.index = [int(str(c).rstrip("A")) for c in raw_ed.index]
+        raw_ed.index.name = "年度"
+        raw_ed = raw_ed.apply(pd.to_numeric, errors="coerce")
+        rows_ = []
+        for r in reps:
+            pg = r["来源"]
+            rows_.append({T("文件"): r["文件"], T("报告年度"): r["年度"], T("公司"): f"{r['公司简称']} {r['公司代码']}",
+                          T("资产负债表页码"): pg.get("货币资金", "—"), T("利润表页码"): pg.get("营业总收入", "—"),
+                          T("现金流量表页码"): pg.get("经营现金流", "—"), T("补充资料页码"): pg.get("固定资产折旧", "—"),
+                          T("提示"): "；".join(tr_msg(x) for x in r["提示"]) or "—"})
+        st.dataframe(pd.DataFrame(rows_), hide_index=True, width="stretch")
+        st.markdown(f"<div class='note'>{T('PDF_MERGE_NOTE')}</div>", unsafe_allow_html=True)
+    cd = pdf_parser.build_company(raw_ed, reps, st.session_state.get("pdf_market"), price_in or None)
+    if cd["quote"]["price"] != cd["quote"]["price"]:
+        st.warning(T("未取得股价：请在左侧填写每股价格（非上市公司可填最近一轮融资价格）后继续。"))
+        st.stop()
+    if cd["quote"]["shares"] != cd["quote"]["shares"]:
+        st.warning(T("年报中未找到股本，无法计算每股价值。请在上方表格中补充「股本（万股）」。"))
+        st.stop()
+    if "a_g_first" not in st.session_state:
+        reset_state(defaults_from(cd))
+    st.session_state["cd"] = cd
 
 cd = st.session_state["cd"]
 an, bs = cd["annual"], cd["bs_latest"]
@@ -262,7 +354,8 @@ except ValueError as e:
 ttm = M.rolling_ttm(cd["quarterly"])
 it = cd.get("interim")
 y1_scale = (4 - it["季度数"]) / 4 if it else 1.0
-ttm_np = float(cd["quarterly"]["归母净利润"].tail(4).sum())
+ttm_np = float(cd["quarterly"]["归母净利润"].tail(4).sum()) if len(cd["quarterly"]) >= 4 \
+    else float(an.loc[base_year, "归母净利润"])            # 无季度数据（如 PDF 模式）时用最近年度
 pe_ttm = mcap_wan / ttm_np if ttm_np > 0 else np.nan
 px = cd.get("prices")
 hi52 = lo52 = np.nan
@@ -275,7 +368,7 @@ iw = M.implied_wacc(fc, A.g_term, ncd["净现金"], shares_wan, q["price"])
 chg = q.get("chg_pct", 0) or 0
 chg_color = ("#c00000" if chg > 0 else "#008000" if chg < 0 else "#555") if not is_en() else \
             ("#008000" if chg > 0 else "#c00000" if chg < 0 else "#555")
-src_txt = T("演示快照") if mode == "demo" else T("实时")
+src_txt = {"demo": T("演示快照"), "live": T("实时"), "pdf": T("年报 PDF")}[mode]
 st.markdown(
     f"### {q['name']}（{q['code']}）"
     f"<span class='hdr-px'>{fmt(q['price'])}</span>"
@@ -460,6 +553,11 @@ with tabs[0]:
                        if q_live else T("实时行情刷新失败，显示加载时的报价"))
         if top[1].button(T("刷新行情"), width="stretch"):
             live_quote.clear(); st.rerun()
+    elif mode == "pdf":
+        mk_ = st.session_state.get("pdf_market") or {}
+        top[0].caption(T("财务数据来自上传的 {n} 份年报（{y0}–{y1}）；股价{p}。",
+                         n=len(st.session_state["pdf_reports"]), y0=int(an.index.min()), y1=base_year,
+                         p=T("为手动输入") if price_in else (T("来自实时行情") if mk_.get("quote") else T("为手动输入"))))
     else:
         top[0].caption(T("演示快照，行情截至 {t}", t=cd.get("asof", "")))
 
@@ -489,6 +587,11 @@ with tabs[0]:
                          annotation_text=f"{T('折现法')} {D['每股价值']:.2f}", annotation_position="top left")
             fp.add_annotation(x=x1, y=ps_pct["P95"], text=T("蒙特卡洛 P5–P95"), showarrow=False,
                               xanchor="right", yanchor="bottom", font=dict(size=11, color=GREY))
+        else:
+            fp.add_annotation(text=T("无股价数据（非上市公司或行情获取失败）"), showarrow=False,
+                              x=0.5, y=0.5, xref="paper", yref="paper", font=dict(color=GREY))
+            fp.add_hline(y=D["每股价值"], line_dash="dash", line_color=GREY,
+                         annotation_text=f"{T('折现法')} {D['每股价值']:.2f}", annotation_position="top left")
         fp.update_layout(**{**LAYOUT, "height": 360}, title=T("近一年股价与估值"), showlegend=False,
                          yaxis_title=T("元/股"))
         st.plotly_chart(fp, width="stretch")
@@ -589,6 +692,8 @@ with tabs[0]:
         w=W, ke=wc["股权成本"], b=A.beta, g=A.g_term, v=D["每股价值"], tv=D["终值占比%"],
         nc=ncd["净现金"] / shares_wan, ncp=ncd["净现金"] / shares_wan / D["每股价值"],
         px=q["price"], iw=iw, n=sims, src=emp["方法"], p50=ps_pct["P50"], p5=ps_pct["P5"], p95=ps_pct["P95"]))
+    if fc["FCFF"].iloc[-1] < 0:
+        st.warning(T("FCFF_NEG", cx=A.capex_pct, da=A.da_pct))
     if W - A.g_term < 4:
         st.warning(T("折现率 {w:.2f}% 与永续增长率 {g:.2f}% 只差 {d:.2f} 个百分点，终值被大幅放大，折现法结果不可靠。",
                      w=W, g=A.g_term, d=W - A.g_term))
@@ -728,11 +833,18 @@ with tabs[4]:
                        file_name=T("{n}_{c}_估值模型.xlsx", n=q["name"], c=q["code"]),
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        width="stretch")
-    st.markdown("#### " + T("空白 Excel 模板"))
+    st.markdown("#### " + T("Excel 模板"))
     st.markdown(T("TEMPLATE_NOTE"))
-    st.download_button(T("下载空白折现法模板（中文）"), template.build_template(),
-                       file_name="DCF估值模板_空白.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                       width="stretch")
+    t1_, t2_ = st.columns(2)
+    t1_.download_button(T("下载已填入本公司数据的模板（中文）"),
+                        template.build_template({"name": q["name"], "code": q["code"], "annual": an, "A": A,
+                                                 "bs": bs, "quote": q}),
+                        file_name=f"DCF估值模板_{q['name']}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        width="stretch", help=T("TEMPLATE_FILLED_HELP"))
+    t2_.download_button(T("下载空白折现法模板（中文）"), template.build_template(),
+                        file_name="DCF估值模板_空白.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        width="stretch")
     st.markdown("#### " + T("方法与数据说明"))
     st.markdown(T("METHOD_NOTES"))

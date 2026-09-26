@@ -187,9 +187,13 @@ def build_annual(st: dict[str, pd.DataFrame], n_years: int = 6) -> pd.DataFrame:
     })
     c["折旧摊销"] = c[["固定资产折旧", "无形资产摊销", "长期待摊摊销", "使用权资产摊销"]].sum(axis=1)
     out = out.join(b, how="left").join(c[["经营现金流", "资本开支", "折旧摊销"]], how="left").fillna(0.0)
+    return derive(out)
 
-    # 衍生指标
-    out["营收增速%"] = out["营业总收入"].pct_change() * 100
+
+def derive(out: pd.DataFrame) -> pd.DataFrame:
+    """由原始报表科目（万元）计算衍生指标。在线数据与 PDF 解析共用。"""
+    out = out.copy()
+    out["营收增速%"] = out["营业总收入"].pct_change(fill_method=None) * 100
     out["毛利率%"] = (out["营业收入"] - out["营业成本"]) / out["营业收入"] * 100
     out["核心经营利润"] = out["营业总收入"] - out["营业总成本"]
     out["核心经营利润率%"] = out["核心经营利润"] / out["营业总收入"] * 100
@@ -294,46 +298,52 @@ def weekly_beta(px: pd.Series, ix: pd.Series, weeks: int = 100) -> tuple[float, 
 
 
 # ─────────────────────────── 总入口
+def load_market(code: str) -> dict:
+    """只取市场数据：实时行情、日线、贝塔、10 年国债。任何一项失败都记录在 status 中。"""
+    status: dict[str, str] = {}
+    m: dict = {}
+    try:
+        m["quote"] = fetch_quote(code); status["实时行情"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        status["实时行情"] = f"失败：{e}"; m["quote"] = None
+    try:
+        m["prices"] = fetch_prices(code); status["个股行情"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        m["prices"] = None; status["个股行情"] = f"失败：{e}"
+    try:
+        ix = fetch_index(); status["沪深300"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        ix = None; status["沪深300"] = f"失败：{e}"
+    m["beta"] = None
+    if m["prices"] is not None and ix is not None:
+        try:
+            b, r2, n = weekly_beta(m["prices"], ix)
+            m["beta"] = {"beta": b, "r2": r2, "weeks": n}; status["贝塔"] = "ok"
+        except Exception as e:  # noqa: BLE001
+            status["贝塔"] = f"失败：{e}"
+    try:
+        m["rf"] = fetch_rf(); status["10年国债"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        m["rf"] = None; status["10年国债"] = f"失败：{e}"
+    m["status"] = status
+    return m
+
+
 def load_company(code: str) -> dict:
     """抓取全部数据。任何一项失败都不会中断，失败项记录在 status 中。"""
-    status: dict[str, str] = {}
-    cd: dict = {"code": code}
-
     try:
-        cd["quote"] = fetch_quote(code); status["实时行情"] = "ok"
-    except Exception as e:
-        status["实时行情"] = f"失败：{e}"; cd["quote"] = None
-
-    try:
-        st = fetch_statements(code); status["三张报表"] = "ok"
+        st = fetch_statements(code)
     except Exception as e:
         raise RuntimeError(f"财务报表抓取失败，无法继续：{e}")
+    m = load_market(code)
+    cd: dict = {"code": code, "quote": m["quote"], "prices": m["prices"], "beta": m["beta"], "rf": m["rf"]}
+    status = {"三张报表": "ok", **m["status"]}
 
     cd["annual"] = build_annual(st)
     cd["annual_long"] = build_annual_long(st)
     cd["bs_latest"] = build_latest_bs(st)
     cd["quarterly"] = build_quarterly(st)
     cd["interim"] = build_interim(st, int(cd["annual"].index.max()))
-
-    try:
-        px = fetch_prices(code); cd["prices"] = px; status["个股行情"] = "ok"
-    except Exception as e:
-        cd["prices"] = None; status["个股行情"] = f"失败：{e}"
-    try:
-        ix = fetch_index(); status["沪深300"] = "ok"
-    except Exception as e:
-        ix = None; status["沪深300"] = f"失败：{e}"
-    cd["beta"] = None
-    if cd["prices"] is not None and ix is not None:
-        try:
-            b, r2, n = weekly_beta(cd["prices"], ix)
-            cd["beta"] = {"beta": b, "r2": r2, "weeks": n}; status["贝塔"] = "ok"
-        except Exception as e:
-            status["贝塔"] = f"失败：{e}"
-    try:
-        cd["rf"] = fetch_rf(); status["10年国债"] = "ok"
-    except Exception as e:
-        cd["rf"] = None; status["10年国债"] = f"失败：{e}"
 
     # 若行情失败，用报表兜底
     if cd["quote"] is None:

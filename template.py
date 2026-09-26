@@ -95,10 +95,13 @@ def _build(example: dict | None) -> bytes:
     _head(wh, 4, ["项目"] + [f"第{i + 1}年" for i in range(YEARS)] + ["报表与科目"])
     for r_, lab, src, key in INPUTS:
         _c(wh, r_, 1, lab, BOLD if r_ == 5 else BLACK, al="left")
+        off = YEARS - len(an) if an is not None else 0        # 不足 5 年时靠右填，左侧留空
         for j, c in enumerate(COLS):
             v = None
-            if an is not None:
-                v = int(an.index[j]) if r_ == 5 else float(an.iloc[j][key])
+            if an is not None and j >= off:
+                row = an.iloc[j - off]
+                v = int(an.index[j - off]) if r_ == 5 else (None if row.get(key) != row.get(key)
+                                                              else float(row.get(key, 0.0)))
             _c(wh, r_, 2 + j, v, BLUE, "0" if r_ == 5 else N2, al="center" if r_ == 5 else None)
         _c(wh, r_, 7, src, NOTE, al="left")
 
