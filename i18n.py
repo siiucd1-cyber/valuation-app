@@ -57,6 +57,26 @@ def tr_msg(s: str) -> str:
 
 
 ZH = {
+    "CALC_EDIT_NOTE": ("预测年份（E 列）的数字可以直接修改，改完即时重算三张表、折现法、蒙特卡洛和敏感性分析；"
+                       "历史列（A 列）为财报实际值，仅供参考。修改过的格在下方三张表中以黄底标出。"),
+    "HIST_LOCK_NOTE": "历史数据来自财报接口，保持与披露一致，不可修改。若要使用自己核对过的数据，可在左侧选择「上传年报 PDF」，识别结果可以逐项修改。",
+    "SHARES_HELP": "年报中识别到的股本会自动使用；未识别到或想用其他股本（如非上市公司的注册资本折算股数）时在此填写。",
+    "STMT_NOTE_利润表": ("核心经营利润 = 营业总收入 − 营业总成本；投资收益及其他 = 利润总额 − 核心经营利润（含理财收益、补助等）。"
+                        "预测期：营收按增速滚动，核心经营利润 = 营收 × 利润率，所得税 = 利润总额 × 有效税率。"),
+    "STMT_NOTE_现金流量表": ("预测期经营活动现金流 = 归母净利润 + 折旧摊销 − 营运资金增加（简化口径）；自由现金流 = 经营活动现金流 − 资本开支；"
+                          "分红 = 归母净利润 × 分红率。历史列为财报披露的经营活动现金流与资本开支。"),
+    "STMT_NOTE_资产负债表": ("经营视角的资产负债表：营运资本 = 应收账款 + 存货 − 应付账款；净现金 = 货币资金 + 交易性金融资产 − 有息负债；"
+                          "其他净资产为倒挤项（长期股权投资、其他资产与负债等），预测期保持基期水平。预测期按滚动关系编制："
+                          "固定资产 += 资本开支 − 折旧摊销，净现金 += 归母净利润 + 折旧摊销 − 资本开支 − 营运资金增加 − 分红，"
+                          "归母权益 += 归母净利润 − 分红，因此「平衡检查」恒为 0。"),
+    "VERDICT_1": ("按当前假设，{name}每股内在价值 {v:.2f} 元，{dir}现价 {px:.2f} 元约 {x:.0%}；"
+                  "蒙特卡洛 90% 区间 {p5:.2f}–{p95:.2f} 元，价值高于现价的概率 {pa:.1%}。"),
+    "VERDICT_2": "企业价值中 {tv:.0f}% 来自终值；净现金贡献 {nc:.2f} 元/股，占每股价值的 {ncp:.0%}。",
+    "VERDICT_3": "估值对「{f}」最敏感：该假设变动 {r}，每股价值在 {lo:.2f}–{hi:.2f} 元之间。",
+    "VERDICT_4": ("要让折现法等于现价，折现率需降到 {iw:.2f}%（模型为 {w:.2f}%）。"
+                  "判断现价是否合理，关键在于这一隐含回报要求、以及上方「现价隐含了什么」所列的增长和利润率条件是否站得住。"),
+    "VERDICT_4N": "在当前经营假设下，任何高于永续增长率的折现率都无法使折现法达到现价。",
+    "VERDICT_NOTE": "结论完全由上方假设推出，改动任一假设都会即时更新；仅供学习研究，不构成投资建议。",
     "FCFF_NEG": ("预测期最后一年的自由现金流为负，终值也随之为负，折现法结果没有意义。常见原因是公司处于扩张期："
                  "资本开支 / 营收（当前 {cx:.1f}%）远高于折旧摊销 / 营收（{da:.1f}%），而模型把这个比例延续到了永续期。"
                  "可在左侧「资本开支与营运资金」中把资本开支调到接近折旧的维持性水平后再看。"),
@@ -236,12 +256,12 @@ EN = {
     "归母净利润（亿元）": "Net profit to parent (RMB 100m)",
     "营收与利润：历史与预测（亿元）": "Revenue & profit: history and forecast (RMB 100m)",
     "结果说明": "Summary",
-    "- **折现法**：折现率 {w:.2f}%（股权成本 {ke:.2f}%，贝塔 {b:.2f}），永续增长率 {g:.2f}%，得到每股 {v:.2f} 元；终值占企业价值 {tv:.1f}%。其中净现金贡献 {nc:.2f} 元/股，占每股价值的 {ncp:.0%}。\n- **现价隐含折现率**：要让折现法结果等于现价 {px:.2f} 元，折现率需为 {iw:.2f}%，模型用的是 {w:.2f}%。\n- **蒙特卡洛**：{n:,} 次模拟（参数来源：{src}），折现法每股价值中位数 {p50:.2f} 元，90% 的结果落在 {p5:.2f}–{p95:.2f} 元。":
+    "- **折现法**：折现率 {w:.2f}%（股权成本 {ke:.2f}%，贝塔 {b:.2f}），永续增长率 {g:.2f}%，得到每股 {v:.2f} 元；终值占企业价值 {tv:.1f}%。其中净现金贡献 {nc:.2f} 元/股，占每股价值的 {ncp:.0%}。\n- **现价隐含折现率**：要让折现法结果等于现价 {px:.2f} 元，折现率需为 {iw}，模型用的是 {w:.2f}%。\n- **蒙特卡洛**：{n:,} 次模拟（参数来源：{src}），折现法每股价值中位数 {p50:.2f} 元，90% 的结果落在 {p5:.2f}–{p95:.2f} 元。":
         ("- **DCF**: WACC {w:.2f}% (cost of equity {ke:.2f}%, beta {b:.2f}), terminal growth {g:.2f}%, giving "
          "RMB {v:.2f} per share; terminal value is {tv:.1f}% of EV. Net cash contributes RMB {nc:.2f} per share, "
          "{ncp:.0%} of the value.\n"
          "- **Implied discount rate**: for the DCF to equal the current price of RMB {px:.2f}, the discount rate "
-         "would need to be {iw:.2f}%; the model uses {w:.2f}%.\n"
+         "would need to be {iw}; the model uses {w:.2f}%.\n"
          "- **Monte Carlo**: {n:,} simulations (parameters: {src}); median DCF value RMB {p50:.2f} per share, with 90% "
          "of outcomes between RMB {p5:.2f} and {p95:.2f}."),
     "现价隐含折现率": "Implied discount rate",
@@ -525,6 +545,7 @@ EN = {
     "永续增长率 +1pp": "Terminal growth +1 pp",
     "只调一个参数时，要达到现价需要：": "Changing one parameter only, reaching the price requires:",
     "参数": "Parameter", "当前": "Current", "达到现价所需": "Needed to reach price", "无解": "No solution",
+    "无解（任何折现率都达不到）": "no solution (no discount rate reaches it)",
     "折现率（%）": "WACC (%)",
     "各年营收增速同时增加（pp）": "Add to revenue growth in every year (pp)",
     "各年核心经营利润率同时增加（pp）": "Add to core margin in every year (pp)",
@@ -590,6 +611,75 @@ EN = {
                  "not meaningful. A common cause is an expansion phase: capex / revenue ({cx:.1f}%) is far above D&A / "
                  "revenue ({da:.1f}%), and the model carries that ratio into perpetuity. Lower capex towards a maintenance "
                  "level close to D&A under “Capex & working capital” on the left."),
+    # ── 计算表
+    "计算表": "Model",
+    "蓝字 = 由假设驱动": "Blue = driven by assumptions", "黄底 = 手动修改过": "Yellow = edited",
+    "灰底 = 历史实际": "Grey = historical actual",
+    "关键假设（逐年，可直接修改）": "Key assumptions by year (editable)",
+    "营收增速（%）": "Revenue growth (%)", "核心经营利润率（%）": "Core operating margin (%)",
+    "投资收益及其他（万元）": "Investment income & other (RMB 10k)",
+    "资本开支 / 营收（%）": "Capex / revenue (%)", "折旧摊销 / 营收（%）": "D&A / revenue (%)",
+    "走势（历史 → 预测）": "Trend (history → forecast)",
+    "已手动修改 {n} 格：{items}。其余年份仍按左侧首末年假设线性插值。":
+        "{n} cell(s) edited: {items}. Other years still interpolate between the first- and last-year assumptions on the left.",
+    "撤销全部手动修改": "Undo all edits",
+    "CALC_EDIT_NOTE": ("Forecast cells (E columns) can be edited directly; the statements, DCF, Monte Carlo and sensitivity "
+                       "recalculate at once. Historical columns (A) are reported figures for reference. Edited cells are "
+                       "highlighted in yellow in the statements below."),
+    "其余假设在左侧调整：有效税率 {tax:.1f}%、营运资本 / 营收增量 {nwc:.1f}%、投资收益计入现金流比例 {of:.0f}%、分红率 {po:.0f}%（只影响预测资产负债表）。":
+        "Other assumptions are set on the left: effective tax {tax:.1f}%, working capital / revenue increase {nwc:.1f}%, "
+        "investment income counted in cash flow {of:.0f}%, payout ratio {po:.0f}% (forecast balance sheet only).",
+    "营收与增速：历史与预测": "Revenue and growth: history and forecast",
+    "营收增速（%，右轴）": "Revenue growth (%, right axis)",
+    "利润率与资本开支（%）": "Margin and capex (%)",
+    "历史数据（来自上传的年报，可修改）": "Historical data (from uploaded reports, editable)",
+    "解析来源与说明": "Extraction sources and notes",
+    "HIST_LOCK_NOTE": ("Historical figures come from the financial data endpoint and are locked to match the disclosures. "
+                       "To use figures you have checked yourself, choose “Upload annual report PDF” on the left; extracted "
+                       "figures can be edited."),
+    "三张表（万元）": "Three statements (RMB 10k)",
+    "利润表": "Income statement", "现金流量表": "Cash flow statement",
+    "资产负债表（经营视角）": "Balance sheet (operating view)",
+    "营运资本": "Working capital", "净现金": "Net cash", "其他净资产": "Other net assets",
+    "营运资本/营收%": "Working capital / revenue %", "平衡检查": "Balance check",
+    "经营活动现金流": "Operating cash flow", "自由现金流": "Free cash flow", "分红": "Dividends",
+    "资本开支/营收%": "Capex / revenue %", "折旧摊销/营收%": "D&A / revenue %",
+    "STMT_NOTE_利润表": ("Core operating profit = revenue − total operating cost; investment income & other = pre-tax profit − "
+                        "core operating profit (wealth-management income, subsidies, etc.). Forecast: revenue rolls forward by "
+                        "growth, core profit = revenue × margin, tax = pre-tax profit × effective rate."),
+    "STMT_NOTE_现金流量表": ("Forecast operating cash flow = net profit to parent + D&A − increase in working capital (simplified); "
+                          "free cash flow = operating cash flow − capex; dividends = net profit × payout ratio. Historical "
+                          "columns show reported operating cash flow and capex."),
+    "STMT_NOTE_资产负债表": ("Operating-view balance sheet: working capital = receivables + inventory − payables; net cash = cash + "
+                          "trading financial assets − interest-bearing debt; other net assets is the balancing item (equity "
+                          "investments, other assets and liabilities) held at the base-year level. Forecasts roll forward: fixed "
+                          "assets += capex − D&A, net cash += net profit + D&A − capex − Δworking capital − dividends, equity += "
+                          "net profit − dividends, so the balance check is always 0."),
+    "自由现金流与折现（万元）": "Free cash flow and discounting (RMB 10k)",
+    "终值": "Terminal value",
+    "估值结论": "Valuation conclusion",
+    "每股内在价值（元）": "Intrinsic value per share (RMB)",
+    "蒙特卡洛 90% 区间（元）": "Monte Carlo 90% range (RMB)",
+    "价值高于现价的概率": "P(value > price)",
+    "模型 {w:.2f}%": "Model {w:.2f}%",
+    "高于": "above", "低于": "below",
+    "VERDICT_1": ("On the current assumptions, {name}'s intrinsic value is RMB {v:.2f} per share, about {x:.0%} {dir} the price "
+                  "of RMB {px:.2f}; the Monte Carlo 90% range is RMB {p5:.2f}–{p95:.2f}, with a {pa:.1%} probability of "
+                  "exceeding the price."),
+    "VERDICT_2": "{tv:.0f}% of enterprise value comes from the terminal value; net cash contributes RMB {nc:.2f} per share ({ncp:.0%} of value).",
+    "VERDICT_3": "The valuation is most sensitive to “{f}”: moving it by {r} puts value per share between RMB {lo:.2f} and {hi:.2f}.",
+    "VERDICT_4": ("For the DCF to equal the price, the discount rate would have to fall to {iw:.2f}% (model: {w:.2f}%). Whether the "
+                  "price is reasonable depends on whether this implied required return, and the growth and margin conditions "
+                  "listed under “What the price implies”, are credible."),
+    "VERDICT_4N": "Under the current operating assumptions, no discount rate above terminal growth brings the DCF up to the price.",
+    "其中 {n} 个逐年假设为手动修改（见上方黄底单元格）。": "{n} of the yearly assumptions were edited manually (yellow cells above).",
+    "VERDICT_NOTE": "The conclusion follows entirely from the assumptions above and updates as they change; for study purposes only, not investment advice.",
+    "分红率（%）": "Payout ratio (%)",
+    "只影响计算表中预测资产负债表的净现金与权益，不影响折现法": "Affects only net cash and equity in the forecast balance sheet on the Model tab, not the DCF",
+    "总股本（万股，0 = 取年报）": "Shares outstanding (10k, 0 = from report)",
+    "SHARES_HELP": "Share capital found in the reports is used automatically; enter a number if it was not found or to use a different share count.",
+    "年报中未找到股本，无法计算每股价值。请在左侧填写总股本。": "Share capital was not found in the reports; enter shares outstanding on the left.",
+    "单位：万元；蓝色为逐年假设，可直接修改": "Units: RMB 10k; blue rows are yearly assumptions and can be edited",
     # ── Excel
     "{n}（{c}）估值模型": "{n} ({c}) valuation model",
     "说明": "Notes",

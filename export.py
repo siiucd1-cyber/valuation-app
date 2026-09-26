@@ -48,71 +48,91 @@ def _sheet(name: str) -> str:
     return t[:31]
 
 
+# 「预测与折现法」表的行号（敏感性表与校验脚本按名称引用）
+ROW = {"g": 5, "rev": 6, "m": 7, "core": 8, "other": 9, "pbt": 10, "np": 11, "nopat": 12,
+       "da_pct": 13, "da": 14, "cx_pct": 15, "cx": 16, "dnwc": 17, "fcff": 18, "t": 19, "disc": 20, "pv": 21,
+       "ke": 24, "kd": 25, "wd": 26, "wacc": 28, "gt": 29, "pvsum": 31, "tv": 32, "tvpv": 33, "ev": 34,
+       "cash": 35, "fin": 36, "debt": 37, "eq": 38, "sh": 39, "ps": 40, "tvp": 41, "vs": 42}
+DRIVER_ROWS = ("g", "m", "other", "da_pct", "cx_pct")     # 逐年假设所在行
+
+
 def write_dcf(wb, R: dict, SF: str, SS: str, base_label: str, base_cells: dict,
-              base_year: int | None = None, n: int = 5) -> None:
-    """写入「预测与折现法」「敏感性」两张表。R 为假设单元格的绝对引用；
-    base_cells 为基期列（B 列）第 6–11 行的取值或公式及字体。导出模型与空白模板共用。"""
+              base_year: int | None = None, n: int = 5, yr_cells: dict | None = None) -> None:
+    """写入「预测与折现法」「敏感性」两张表。
+    R：假设表单元格的绝对引用；base_cells：基期列（B 列）{行名: (值或公式, 字体)}；
+    yr_cells：逐年假设 {行名: [(值或公式, 字体) × n]}，缺省时按假设表的首末年线性插值（空白模板用）。"""
     F = f"'{SF}'!"
-    # ── 预测与折现法
+    X = ROW
     wf = wb.create_sheet(SF)
     wf.column_dimensions["A"].width = 30
     for col in range(2, 9):
         wf.column_dimensions[get_column_letter(col)].width = 14
     wf["A1"] = T("盈利预测与折现法"); wf["A1"].font = TITLE
-    wf["A2"] = T("单位：万元"); wf["A2"].font = NOTE
+    wf["A2"] = T("单位：万元；蓝色为逐年假设，可直接修改"); wf["A2"].font = NOTE
     _head(wf, 4, ["项目", base_label] + ([f"{base_year + i + 1}E" for i in range(n)] if base_year
                                          else [f"E{i + 1}" for i in range(n)]))
-    lab = {5: "营收增速（%）", 6: "营业总收入", 7: "核心经营利润率（%）", 8: "核心经营利润",
-           9: "投资收益及其他", 10: "利润总额", 11: "归母净利润", 12: "NOPAT",
-           13: "折旧摊销", 14: "资本开支", 15: "营运资金增加", 16: "自由现金流 FCFF",
-           17: "折现年数", 18: "折现因子", 19: "现值"}
-    for r_, t in lab.items():
-        _c(wf, r_, 1, T(t), BOLD if r_ in (6, 11, 16, 19) else BLACK, fill=KEY if r_ in (6, 11, 16) else None,
-           al="left")
-    for r_, (v, font) in base_cells.items():
-        _c(wf, r_, 2, v, font, PCT if r_ == 7 else N2)
+    lab = {"g": "营收增速（%）", "rev": "营业总收入", "m": "核心经营利润率（%）", "core": "核心经营利润",
+           "other": "投资收益及其他", "pbt": "利润总额", "np": "归母净利润", "nopat": "NOPAT",
+           "da_pct": "折旧摊销 / 营收（%）", "da": "折旧摊销", "cx_pct": "资本开支 / 营收（%）", "cx": "资本开支",
+           "dnwc": "营运资金增加", "fcff": "自由现金流 FCFF", "t": "折现年数", "disc": "折现因子", "pv": "现值"}
+    key_rows = ("rev", "np", "fcff")
+    for k, t in lab.items():
+        _c(wf, X[k], 1, T(t), BOLD if k in key_rows + ("pv",) else BLACK,
+           fill=KEY if k in key_rows else None, al="left")
+    for k, (v, font) in base_cells.items():
+        _c(wf, X[k], 2, v, font, PCT if k in ("g", "m", "da_pct", "cx_pct") else N2)
+    if yr_cells is None:        # 按首末年插值（公式，黑色）
+        yr_cells = {
+            "g": [(f"={R['g1']}+({R['g5']}-{R['g1']})*{i}/{n - 1}", BLACK) for i in range(n)],
+            "m": [(f"={R['m1']}+({R['m5']}-{R['m1']})*{i}/{n - 1}", BLACK) for i in range(n)],
+            "other": [(f"={R['o1']}*(1+{R['oc']}/100)^{i}", BLACK) for i in range(n)],
+            "da_pct": [(f"={R['da']}", BLACK)] * n,
+            "cx_pct": [(f"={R['cx']}", BLACK)] * n}
     for i in range(n):
         C = get_column_letter(3 + i); P = get_column_letter(2 + i)
-        _c(wf, 5, 3 + i, f"={R['g1']}+({R['g5']}-{R['g1']})*{i}/{n - 1}", fmt=PCT)
-        _c(wf, 6, 3 + i, f"={P}6*(1+{C}5/100)", fmt=N2, fill=KEY)
-        _c(wf, 7, 3 + i, f"={R['m1']}+({R['m5']}-{R['m1']})*{i}/{n - 1}", fmt=PCT)
-        _c(wf, 8, 3 + i, f"={C}6*{C}7/100", fmt=N2)
-        _c(wf, 9, 3 + i, f"={R['o1']}*(1+{R['oc']}/100)^{i}", fmt=N2)
-        _c(wf, 10, 3 + i, f"={C}8+{C}9", fmt=N2)
-        _c(wf, 11, 3 + i, f"={C}10*(1-{R['tax']}/100)*(1-{R['mino']}/100)", fmt=N2, fill=KEY)
-        _c(wf, 12, 3 + i, f"=({C}8+{C}9*{R['of']}/100)*(1-{R['tax']}/100)", fmt=N2)
-        _c(wf, 13, 3 + i, f"={C}6*{R['da']}/100", fmt=N2)
-        _c(wf, 14, 3 + i, f"={C}6*{R['cx']}/100", fmt=N2)
-        _c(wf, 15, 3 + i, f"=({C}6-{P}6)*{R['nwc']}/100", fmt=N2)
-        _c(wf, 16, 3 + i, f"={C}12+{C}13-{C}14-{C}15", fmt=N2, fill=KEY)
-        _c(wf, 17, 3 + i, i + 1, fmt="0")
-        _c(wf, 18, 3 + i, f"=1/(1+$B$26/100)^{C}17", fmt=N4)
-        _c(wf, 19, 3 + i, f"={C}16*{C}18", fmt=N2)
+        r = lambda k: f"{C}{X[k]}"
+        for k in DRIVER_ROWS:
+            v, font = yr_cells[k][i]
+            _c(wf, X[k], 3 + i, v, font, N2 if k == "other" else PCT)
+        _c(wf, X["rev"], 3 + i, f"={P}{X['rev']}*(1+{r('g')}/100)", fmt=N2, fill=KEY)
+        _c(wf, X["core"], 3 + i, f"={r('rev')}*{r('m')}/100", fmt=N2)
+        _c(wf, X["pbt"], 3 + i, f"={r('core')}+{r('other')}", fmt=N2)
+        _c(wf, X["np"], 3 + i, f"={r('pbt')}*(1-{R['tax']}/100)*(1-{R['mino']}/100)", fmt=N2, fill=KEY)
+        _c(wf, X["nopat"], 3 + i, f"=({r('core')}+{r('other')}*{R['of']}/100)*(1-{R['tax']}/100)", fmt=N2)
+        _c(wf, X["da"], 3 + i, f"={r('rev')}*{r('da_pct')}/100", fmt=N2)
+        _c(wf, X["cx"], 3 + i, f"={r('rev')}*{r('cx_pct')}/100", fmt=N2)
+        _c(wf, X["dnwc"], 3 + i, f"=({r('rev')}-{P}{X['rev']})*{R['nwc']}/100", fmt=N2)
+        _c(wf, X["fcff"], 3 + i, f"={r('nopat')}+{r('da')}-{r('cx')}-{r('dnwc')}", fmt=N2, fill=KEY)
+        _c(wf, X["t"], 3 + i, i + 1, fmt="0")
+        _c(wf, X["disc"], 3 + i, f"=1/(1+$B${X['wacc']}/100)^{r('t')}", fmt=N4)
+        _c(wf, X["pv"], 3 + i, f"={r('fcff')}*{r('disc')}", fmt=N2)
 
     LC = get_column_letter(2 + n)  # 最后一年所在列
-    blk = [(22, "股权成本（%）", f"={R['rf']}+{R['beta']}*{R['erp']}+{R['sp']}", PCT),
-           (23, "税后债务成本（%）", f"={R['kd']}*(1-{R['tax']}/100)", PCT),
-           (24, "债务权重（%）", f"=IF({R['debt']}+{R['mcap']}>0,{R['debt']}/({R['debt']}+{R['mcap']})*100,0)", PCT),
-           (26, "折现率 WACC（%）", "=B22*(1-B24/100)+B23*B24/100", PCT),
-           (27, "永续增长率（%）", f"={R['gt']}", PCT),
-           (29, "预测期现值合计", f"=SUM(C19:{LC}19)", N2),
-           (30, "终值", f"={LC}16*(1+B27/100)/(B26/100-B27/100)", N2),
-           (31, "终值现值", f"=B30*{LC}18", N2),
-           (32, "企业价值", "=B29+B31", N2),
-           (33, "加：货币资金", f"={R['cash']}*{R['add_cash']}", N2),
-           (34, "加：交易性金融资产", f"={R['fin']}*{R['add_fin']}", N2),
-           (35, "减：有息负债", f"={R['debt']}", N2),
-           (36, "股权价值", "=B32+B33+B34-B35", N2),
-           (37, "总股本（万股）", f"={R['shares']}", N2),
-           (38, "每股价值（元）", "=B36/B37", N2),
-           (39, "终值占企业价值（%）", "=B31/B32*100", PCT),
-           (40, "较现价", f"=B38/{R['price']}-1", "0.0%")]
-    wf.cell(row=21, column=1, value=T("折现率")).font = TITLE
-    wf.cell(row=28, column=1, value=T("估值")).font = TITLE
-    for r_, t, f, fm in blk:
-        _c(wf, r_, 1, T(t), BOLD if r_ in (26, 32, 36, 38) else BLACK, al="left",
-           fill=KEY if r_ in (26, 38) else None)
-        _c(wf, r_, 2, f, fmt=fm, fill=KEY if r_ in (26, 38) else None)
+    B = lambda k: f"B{X[k]}"
+    blk = [("ke", "股权成本（%）", f"={R['rf']}+{R['beta']}*{R['erp']}+{R['sp']}", PCT),
+           ("kd", "税后债务成本（%）", f"={R['kd']}*(1-{R['tax']}/100)", PCT),
+           ("wd", "债务权重（%）", f"=IF({R['debt']}+{R['mcap']}>0,{R['debt']}/({R['debt']}+{R['mcap']})*100,0)", PCT),
+           ("wacc", "折现率 WACC（%）", f"={B('ke')}*(1-{B('wd')}/100)+{B('kd')}*{B('wd')}/100", PCT),
+           ("gt", "永续增长率（%）", f"={R['gt']}", PCT),
+           ("pvsum", "预测期现值合计", f"=SUM(C{X['pv']}:{LC}{X['pv']})", N2),
+           ("tv", "终值", f"={LC}{X['fcff']}*(1+{B('gt')}/100)/({B('wacc')}/100-{B('gt')}/100)", N2),
+           ("tvpv", "终值现值", f"={B('tv')}*{LC}{X['disc']}", N2),
+           ("ev", "企业价值", f"={B('pvsum')}+{B('tvpv')}", N2),
+           ("cash", "加：货币资金", f"={R['cash']}*{R['add_cash']}", N2),
+           ("fin", "加：交易性金融资产", f"={R['fin']}*{R['add_fin']}", N2),
+           ("debt", "减：有息负债", f"={R['debt']}", N2),
+           ("eq", "股权价值", f"={B('ev')}+{B('cash')}+{B('fin')}-{B('debt')}", N2),
+           ("sh", "总股本（万股）", f"={R['shares']}", N2),
+           ("ps", "每股价值（元）", f"={B('eq')}/{B('sh')}", N2),
+           ("tvp", "终值占企业价值（%）", f"={B('tvpv')}/{B('ev')}*100", PCT),
+           ("vs", "较现价", f"={B('ps')}/{R['price']}-1", "0.0%")]
+    wf.cell(row=X["ke"] - 1, column=1, value=T("折现率")).font = TITLE
+    wf.cell(row=X["pvsum"] - 1, column=1, value=T("估值")).font = TITLE
+    for k, t, f, fm in blk:
+        hi = k in ("wacc", "ps")
+        _c(wf, X[k], 1, T(t), BOLD if k in ("wacc", "ev", "eq", "ps") else BLACK, al="left",
+           fill=KEY if hi else None)
+        _c(wf, X[k], 2, f, fmt=fm, fill=KEY if hi else None)
 
     # ── 敏感性
     wsn = wb.create_sheet(SS)
@@ -122,17 +142,18 @@ def write_dcf(wb, R: dict, SF: str, SS: str, base_label: str, base_cells: dict,
     _c(wsn, 4, 1, "WACC \\ g", BOLD, fill=HEAD, al="center")
     dws, dgs = [-2, -1, 0, 1, 2], [-1.0, -0.5, 0, 0.5, 1.0]
     for j, dg in enumerate(dgs):
-        _c(wsn, 4, 2 + j, f"={F}$B$27+({dg})", BOLD, PCT, HEAD, "center")
+        _c(wsn, 4, 2 + j, f"={F}$B${X['gt']}+({dg})", BOLD, PCT, HEAD, "center")
     exps = "{" + ",".join(str(i + 1) for i in range(n)) + "}"
+    fr = X["fcff"]
     for i, dw in enumerate(dws):
         r_ = 5 + i
-        _c(wsn, r_, 1, f"={F}$B$26+({dw})", BOLD, PCT, HEAD, "center")
+        _c(wsn, r_, 1, f"={F}$B${X['wacc']}+({dw})", BOLD, PCT, HEAD, "center")
         for j in range(len(dgs)):
             gc = f"{get_column_letter(2 + j)}$4"
             w_ = f"$A{r_}"
-            f = (f"=IF({w_}<={gc},\"—\",(SUMPRODUCT({F}$C$16:${LC}$16/(1+{w_}/100)^{exps})"
-                 f"+{F}${LC}$16*(1+{gc}/100)/({w_}/100-{gc}/100)/(1+{w_}/100)^{n}"
-                 f"+{F}$B$33+{F}$B$34-{F}$B$35)/{F}$B$37)")
+            f = (f"=IF({w_}<={gc},\"—\",(SUMPRODUCT({F}$C${fr}:${LC}${fr}/(1+{w_}/100)^{exps})"
+                 f"+{F}${LC}${fr}*(1+{gc}/100)/({w_}/100-{gc}/100)/(1+{w_}/100)^{n}"
+                 f"+{F}$B${X['cash']}+{F}$B${X['fin']}-{F}$B${X['debt']})/{F}$B${X['sh']})")
             _c(wsn, r_, 2 + j, f, fmt=N2, fill=KEY if (dw == 0 and dgs[j] == 0) else None, al="center")
 
 
@@ -167,18 +188,10 @@ def build_workbook(cd: dict, A, res: dict) -> bytes:
     _head(wa, 3, ["项目", "数值", "说明"])
     items = [
         ("base_rev", T("{y}A 营业总收入（万元）", y=base), float(an.loc[base, "营业总收入"]), "财报"),
-        ("g1", "第1年营收增速（%）", A.g_first, "中间年份线性插值"),
-        ("g5", "第5年营收增速（%）", A.g_last, ""),
-        ("m1", "第1年核心经营利润率（%）", A.m_first, "（营业总收入−营业总成本）÷ 营业总收入"),
-        ("m5", "第5年核心经营利润率（%）", A.m_last, ""),
-        ("o1", "第1年投资收益及其他（万元）", A.other_first, "利润总额 − 核心经营利润"),
-        ("oc", "投资收益及其他年变化（%）", A.other_change, ""),
         ("of", "其中计入经营现金流比例（%）", A.other_in_fcf, "0 表示折现法只对核心主业定价"),
         ("tax", "有效税率（%）", A.tax, ""),
         ("mino", "少数股东占比（%）", A.minority, ""),
-        ("da", "折旧摊销 / 营收（%）", A.da_pct, ""),
-        ("cx", "资本开支 / 营收（%）", A.capex_pct, ""),
-        ("nwc", "营运资金增加 / 营收增量（%）", A.nwc_pct, ""),
+        ("nwc", "营运资金增加 / 营收增量（%）", A.nwc_pct, "营收增速、利润率、投资收益、折旧摊销与资本开支为逐年假设，见「预测与折现法」表蓝色行"),
         ("rf", "无风险利率（%）", A.rf, "10年期国债"),
         ("beta", "贝塔", A.beta, "100周回归"),
         ("erp", "市场风险溢价（%）", A.erp, ""),
@@ -201,13 +214,16 @@ def build_workbook(cd: dict, A, res: dict) -> bytes:
         _c(wa, i, 3, T(note), NOTE, al="left")
         R[k] = f"'{SA}'!$B${i}"
 
+    L = an.loc[base]
+    drv = res["drv"]
     write_dcf(wb, R, SF, SS, f"{base}A", {
-        6: (f"={R['base_rev']}", BLACK),
-        7: (float(an.loc[base, "核心经营利润率%"]), BLUE),
-        8: (float(an.loc[base, "核心经营利润"]), BLUE),
-        9: (float(an.loc[base, "投资收益及其他"]), BLUE),
-        10: (float(an.loc[base, "利润总额"]), BLUE),
-        11: (float(an.loc[base, "归母净利润"]), BLUE)}, base_year=base)
+        "g": (float(L["营收增速%"]), BLUE), "rev": (f"={R['base_rev']}", BLACK),
+        "m": (float(L["核心经营利润率%"]), BLUE), "core": (float(L["核心经营利润"]), BLUE),
+        "other": (float(L["投资收益及其他"]), BLUE), "pbt": (float(L["利润总额"]), BLUE),
+        "np": (float(L["归母净利润"]), BLUE), "da_pct": (float(L["折旧摊销/营收%"]), BLUE),
+        "cx_pct": (float(L["资本开支/营收%"]), BLUE)},
+        base_year=base, yr_cells={k: [(float(x), BLUE) for x in drv[src]] for k, src in
+                                  (("g", "g"), ("m", "m"), ("other", "other"), ("da_pct", "da"), ("cx_pct", "capex"))})
 
     # ── 历史数据
     wh = wb.create_sheet(_sheet("历史数据"))

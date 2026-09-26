@@ -55,6 +55,12 @@ def build_template(example: dict | None = None) -> bytes:
 
 
 def _build(example: dict | None) -> bytes:
+    yr_cells = None
+    if example and example.get("drv") is not None and example.get("ovr"):
+        # 网页上手动改过逐年假设：预测表中改为逐年数值（蓝色），否则仍用首末年插值公式
+        d = example["drv"]
+        yr_cells = {k: [(float(x), BLUE) for x in d[src]] for k, src in
+                    (("g", "g"), ("m", "m"), ("other", "other"), ("da_pct", "da"), ("cx_pct", "capex"))}
     wb = Workbook()
     wb.remove(wb.active)
     an = example["annual"].tail(YEARS) if example else None
@@ -196,12 +202,11 @@ def _build(example: dict | None) -> bytes:
     # ── 预测与折现法、敏感性（与网页导出共用同一套公式）
     base_year = int(an.index[-1]) if an is not None else None
     write_dcf(wb, R, FS, SS, f"{base_year}A" if base_year else "基期", {
-        6: (f"={R['base_rev']}", BLACK),
-        7: (f"={H}{LAST}28", BLACK),
-        8: (f"={H}{LAST}27", BLACK),
-        9: (f"={H}{LAST}29", BLACK),
-        10: (f"={H}{LAST}8", BLACK),
-        11: (f"={H}{LAST}11", BLACK)}, base_year=base_year)
+        "g": (f"={H}{LAST}26", BLACK), "rev": (f"={R['base_rev']}", BLACK),
+        "m": (f"={H}{LAST}28", BLACK), "core": (f"={H}{LAST}27", BLACK),
+        "other": (f"={H}{LAST}29", BLACK), "pbt": (f"={H}{LAST}8", BLACK),
+        "np": (f"={H}{LAST}11", BLACK), "da_pct": (f"={H}{LAST}33", BLACK),
+        "cx_pct": (f"={H}{LAST}34", BLACK)}, base_year=base_year, yr_cells=yr_cells)
 
     # 空白模板未填数据时，结果格显示为空而不是 #DIV/0!
     for w in (wb[FS], wb[SS]):

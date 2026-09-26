@@ -22,23 +22,39 @@ from i18n import T, TL, is_en, tr_msg
 st.set_page_config(page_title="估值工作台 · Valuation Workbench", layout="wide",
                    initial_sidebar_state="expanded")
 
-st.markdown("""
+# ─────────────────────────── 主题：按浏览器/系统的深浅色自动配色（深色模式下深灰线条会“消失”）
+try:
+    DARK_MODE = st.context.theme.type == "dark"
+except Exception:  # noqa: BLE001
+    DARK_MODE = False
+if DARK_MODE:
+    GREY, DARK, LIGHT, RED, GREEN = "#a8a8a8", "#ececec", "#5c5c5c", "#ff6b6b", "#4cd28a"
+    C = dict(label="#bdbdbd", note="#a9a9a9", box="rgba(255,255,255,0.07)", hi="rgba(255,255,255,0.16)",
+             hist="rgba(255,255,255,0.05)", inp="#7fb2ff", ovr="rgba(255,196,0,0.28)", grid="rgba(255,255,255,0.12)")
+else:
+    GREY, DARK, LIGHT, RED, GREEN = "#8c8c8c", "#262626", "#d9d9d9", "#c00000", "#008000"
+    C = dict(label="#555", note="#666", box="#f6f6f6", hi="#e6e6e6", hist="#f4f4f4", inp="#0b57d0",
+             ovr="#fff2b3", grid="#e9e9e9")
+LAYOUT = dict(template="plotly_dark" if DARK_MODE else "simple_white", height=320,
+              margin=dict(l=10, r=10, t=40, b=10), font=dict(size=12), legend=dict(orientation="h", y=-0.2),
+              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+
+st.markdown(f"""
 <style>
-  .block-container {padding-top: 1.6rem; padding-bottom: 3rem; max-width: 1400px;}
-  [data-testid="stMetricValue"] {font-size: 1.55rem;}
-  [data-testid="stMetricLabel"] p {font-size: 0.85rem; color: #555;}
-  .note {font-size: 0.82rem; color: #666; line-height: 1.6;}
-  .formula {font-family: ui-monospace, Menlo, monospace; font-size: 0.86rem;
-            background: #f6f6f6; padding: 0.6rem 0.8rem; border-radius: 4px; line-height: 1.8;}
-  .hdr-px {font-size: 1.05rem; font-weight: 600; margin-left: 0.6rem;}
-  .hdr-sub {font-size: 0.9rem; color: #777;}
-  h3 {margin-top: 0.6rem;}
+  .block-container {{padding-top: 1.6rem; padding-bottom: 3rem; max-width: 1400px;}}
+  [data-testid="stMetricValue"] {{font-size: 1.55rem;}}
+  [data-testid="stMetricLabel"] p {{font-size: 0.85rem; color: {C['label']};}}
+  .note {{font-size: 0.82rem; color: {C['note']}; line-height: 1.6;}}
+  .formula {{font-family: ui-monospace, Menlo, monospace; font-size: 0.86rem;
+            background: {C['box']}; padding: 0.6rem 0.8rem; border-radius: 4px; line-height: 1.8;}}
+  .hdr-px {{font-size: 1.05rem; font-weight: 600; margin-left: 0.6rem;}}
+  .hdr-sub {{font-size: 0.9rem; color: {C['note']};}}
+  .legend-chip {{display:inline-block; padding:0 0.45rem; border-radius:3px; margin-right:0.6rem; font-size:0.8rem;}}
+  .verdict {{background:{C['box']}; border-left:3px solid {GREY}; padding:0.8rem 1rem; border-radius:4px; line-height:1.9;}}
+  h3 {{margin-top: 0.6rem;}}
 </style>
 """, unsafe_allow_html=True)
 
-GREY, DARK, LIGHT = "#8c8c8c", "#262626", "#d9d9d9"
-LAYOUT = dict(template="simple_white", height=320, margin=dict(l=10, r=10, t=40, b=10),
-              font=dict(size=12), legend=dict(orientation="h", y=-0.2))
 # 分位线标注：P5 在线左、P95 在线右，避免分布较窄时文字重叠（具体数值见下方表格）
 PCT_LINES = (("P5", "dot", "top left"), ("P50", "solid", "top"), ("P95", "dot", "top right"))
 ON_CLOUD = os.getcwd().startswith("/mount/src")  # Streamlit Community Cloud 默认打开演示数据
@@ -69,6 +85,13 @@ def fetch_demo(code: str) -> dict:
     return data.load_snapshot(os.path.join(data.DEMO_DIR, f"{code}.json"))
 
 
+NA = -987654321.123   # 占位：st.dataframe 会把真实空值显示成 "None"，先填占位数再格式化为 "—"（占位数过大时前端会报错）
+
+
+def na_fmt(f):
+    return lambda v: "—" if (v is None or v != v or v == NA) else f(v)
+
+
 def fmt(x, d=2):
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return "—"
@@ -87,10 +110,10 @@ def value_hist(v: np.ndarray, pct: dict, price: float, p_above: float, height: i
     f = go.Figure(go.Histogram(x=v, nbinsx=70, marker_color=LIGHT, marker_line=dict(color=GREY, width=0.3)))
     for p_, dash, pos in PCT_LINES:
         f.add_vline(x=pct[p_], line_dash=dash, line_color=DARK, annotation_text=p_, annotation_position=pos)
-    f.add_vline(x=price, line_dash="dash", line_color="#c00000",
+    f.add_vline(x=price, line_dash="dash", line_color=RED,
                 annotation_text=T("现价 {p:.2f}（高于现价概率 {b:.1%}）", p=price, b=p_above),
                 annotation_position="top left" if price > pct["P50"] else "top right",
-                annotation_font_color="#c00000")
+                annotation_font_color=RED)
     lo_, hi_ = np.percentile(v, 0.5), np.percentile(v, 99.5)
     f.update_layout(**{**LAYOUT, "height": height}, title=T("折现法每股价值分布（元）"), showlegend=False,
                     xaxis=dict(range=[min(lo_, price) * 0.9, max(hi_, price) * 1.08]))
@@ -156,6 +179,46 @@ FIELDS = list(M.Assumptions().to_dict().keys())
 def reset_state(a: M.Assumptions):
     for k, v in a.to_dict().items():
         st.session_state[f"a_{k}"] = v
+    clear_overrides()
+
+
+def clear_overrides():
+    """清空计算表里逐年假设的手动修改（换公司、恢复默认值时调用）。"""
+    st.session_state["ovr"] = {}
+    st.session_state["ovr_ver"] = st.session_state.get("ovr_ver", 0) + 1
+
+
+# 计算表中可逐年修改的假设（行顺序即编辑表的行顺序）
+DRV_ROWS = [("g", "营收增速（%）"), ("m", "核心经营利润率（%）"), ("other", "投资收益及其他（万元）"),
+            ("capex", "资本开支 / 营收（%）"), ("da", "折旧摊销 / 营收（%）")]
+
+
+def on_calc_edit():
+    """编辑表的修改写入 ovr（绝对值覆盖）；空值表示撤销该格的修改。"""
+    ed = st.session_state.get(f"calc_editor_{st.session_state.get('ovr_ver', 0)}", {})
+    cols = st.session_state.get("fc_cols", [])
+    ovr = st.session_state.setdefault("ovr", {})
+    for r_, chg in ed.get("edited_rows", {}).items():
+        k_ = DRV_ROWS[int(r_)][0]
+        for col, v in chg.items():
+            if col in cols:
+                i = cols.index(col)
+                if v is None:
+                    ovr.get(k_, {}).pop(i, None)
+                else:
+                    ovr.setdefault(k_, {})[i] = float(v)
+
+
+def on_pdf_edit():
+    ed = st.session_state.get(f"pdf_editor_{st.session_state.get('pdf_ver', 0)}", {})
+    fields, years = st.session_state.get("pdf_fields", []), st.session_state.get("pdf_years", [])
+    po = st.session_state.setdefault("pdf_ovr", {})
+    for r_, chg in ed.get("edited_rows", {}).items():
+        f_ = fields[int(r_)]
+        for col, v in chg.items():
+            y_ = int(str(col).rstrip("A"))
+            if y_ in years:
+                po[(y_, f_)] = float("nan") if v is None else float(v)
 
 
 def current_assumptions() -> M.Assumptions:
@@ -178,6 +241,8 @@ with st.sidebar:
         use_mkt = st.checkbox(T("识别到股票代码时，获取实时股价与贝塔"), True, key="pdf_mkt")
         price_in = st.number_input(T("每股价格（元，0 = 自动）"), min_value=0.0, value=0.0, step=0.1,
                                    key="pdf_price", help=T("PRICE_HELP"))
+        shares_in = st.number_input(T("总股本（万股，0 = 取年报）"), min_value=0.0, value=0.0, step=100.0,
+                                    key="pdf_shares", help=T("SHARES_HELP"))
         code_in, go_btn = st.session_state.get("code", ""), False
     else:
         with st.form("pick"):
@@ -188,6 +253,7 @@ with st.sidebar:
             st.caption(T("可用演示代码：") + "、".join(data.demo_codes()))
 
 code = str(code_in).strip()
+TOP = st.empty()     # 固定占位：进度条、加载提示、回退警告都放这里，避免页签位置变化导致选中的页签被重置
 if mode == "pdf":
     if not ups:
         st.markdown("### " + T("上传年报 PDF，自动抽取报表并估值"))
@@ -196,29 +262,30 @@ if mode == "pdf":
     key = "pdf|" + "|".join(sorted(pdf_parser.file_key(f.getvalue()) for f in ups)) + f"|{use_mkt}"
     if st.session_state.get("key") != key:
         reps = []
-        bar = st.progress(0.0)
+        bar = TOP.progress(0.0)
         for i, f in enumerate(ups):
             bar.progress(i / len(ups), text=T("正在解析 {n}（{i}/{k}）……", n=f.name, i=i + 1, k=len(ups)))
             reps.append(parse_pdf(f.getvalue(), f.name))
-        bar.empty()
+        TOP.empty()
         bad = [r["文件"] for r in reps if not r.get("年度")]
         reps = sorted([r for r in reps if r.get("年度")], key=lambda r: r["年度"])
         if bad:
-            st.warning(T("以下文件未识别为年度报告，已跳过：{f}", f="、".join(bad)))
+            TOP.warning(T("以下文件未识别为年度报告，已跳过：{f}", f="、".join(bad)))
         if not reps:
             st.error(T("没有可用的年度报告。")); st.stop()
         raw, src = pdf_parser.merge_reports(reps)
         code = reps[-1].get("公司代码") or ""
         market = None
         if use_mkt and code:
-            with st.spinner(T("识别到股票代码 {c}，正在获取实时股价与贝塔……", c=code)):
+            with TOP.container(), st.spinner(T("识别到股票代码 {c}，正在获取实时股价与贝塔……", c=code)):
                 try:
                     market = fetch_market(code)
                 except Exception:  # noqa: BLE001
                     market = None
         st.session_state.update(pdf_reports=reps, pdf_raw=raw, pdf_src=src, pdf_market=market,
                                 key=key, code=code)
-        st.session_state.pop("pdf_editor", None)
+        st.session_state["pdf_ovr"] = {}
+        st.session_state["pdf_ver"] = st.session_state.get("pdf_ver", 0) + 1
         cd = pdf_parser.build_company(raw, reps, market, price_in or None)
         st.session_state["cd"] = cd
         if cd["quote"]["price"] == cd["quote"]["price"]:
@@ -229,11 +296,11 @@ elif go_btn or "cd" not in st.session_state or st.session_state.get("key") != f"
         if mode == "demo":
             cd = fetch_demo(code)
         else:
-            with st.spinner(T("正在从东方财富、新浪拉取数据（首次约 30–60 秒，之后一小时内有缓存）……")):
+            with TOP.container(), st.spinner(T("正在从东方财富、新浪拉取数据（首次约 30–60 秒，之后一小时内有缓存）……")):
                 cd = fetch_live(code)
     except Exception as e:  # noqa: BLE001
         if os.path.exists(os.path.join(data.DEMO_DIR, f"{code}.json")):
-            st.warning(T("实时数据获取失败，已改用演示快照。原因：{e}", e=tr_msg(str(e))))
+            TOP.warning(T("实时数据获取失败，已改用演示快照。原因：{e}", e=tr_msg(str(e))))
             cd = fetch_demo(code)
         else:
             st.error(T("数据获取失败：{e}", e=tr_msg(str(e))))
@@ -242,37 +309,20 @@ elif go_btn or "cd" not in st.session_state or st.session_state.get("key") != f"
     reset_state(defaults_from(cd))
 
 if mode == "pdf":
-    # 解析结果可人工核对、修改；修改后整套估值即时按新数据重算
+    # 解析结果可在「计算表」页签修改；修改记录在 pdf_ovr 中，这里先应用，保证整套估值用的是修改后的数据
     reps, raw0 = st.session_state["pdf_reports"], st.session_state["pdf_raw"]
-    with st.expander(T("年报解析结果（万元，可直接修改）"), expanded=False):
-        lab = {f: T(f) for f in raw0.columns}
-        grid = raw0.apply(pd.to_numeric, errors="coerce").T.astype(float)
-        grid.index = [lab[f] for f in grid.index]
-        grid.columns = [f"{y}A" for y in grid.columns]
-        ed = st.data_editor(grid, key="pdf_editor", width="stretch", height=36 * (len(grid) + 1) + 3,
-                            column_config={c: st.column_config.NumberColumn(format="%.2f") for c in grid.columns})
-        back = {v: k for k, v in lab.items()}
-        raw_ed = ed.copy()
-        raw_ed.index = [back.get(i, i) for i in raw_ed.index]
-        raw_ed = raw_ed.T
-        raw_ed.index = [int(str(c).rstrip("A")) for c in raw_ed.index]
-        raw_ed.index.name = "年度"
-        raw_ed = raw_ed.apply(pd.to_numeric, errors="coerce")
-        rows_ = []
-        for r in reps:
-            pg = r["来源"]
-            rows_.append({T("文件"): r["文件"], T("报告年度"): r["年度"], T("公司"): f"{r['公司简称']} {r['公司代码']}",
-                          T("资产负债表页码"): pg.get("货币资金", "—"), T("利润表页码"): pg.get("营业总收入", "—"),
-                          T("现金流量表页码"): pg.get("经营现金流", "—"), T("补充资料页码"): pg.get("固定资产折旧", "—"),
-                          T("提示"): "；".join(tr_msg(x) for x in r["提示"]) or "—"})
-        st.dataframe(pd.DataFrame(rows_), hide_index=True, width="stretch")
-        st.markdown(f"<div class='note'>{T('PDF_MERGE_NOTE')}</div>", unsafe_allow_html=True)
+    raw_ed = raw0.apply(pd.to_numeric, errors="coerce").astype(float).copy()
+    for (y_, f_), v_ in st.session_state.get("pdf_ovr", {}).items():
+        if y_ in raw_ed.index:
+            raw_ed.loc[y_, f_] = v_
+    if shares_in:
+        raw_ed.loc[raw_ed.index.max(), "股本（万股）"] = shares_in
     cd = pdf_parser.build_company(raw_ed, reps, st.session_state.get("pdf_market"), price_in or None)
     if cd["quote"]["price"] != cd["quote"]["price"]:
         st.warning(T("未取得股价：请在左侧填写每股价格（非上市公司可填最近一轮融资价格）后继续。"))
         st.stop()
     if cd["quote"]["shares"] != cd["quote"]["shares"]:
-        st.warning(T("年报中未找到股本，无法计算每股价值。请在上方表格中补充「股本（万股）」。"))
+        st.warning(T("年报中未找到股本，无法计算每股价值。请在左侧填写总股本。"))
         st.stop()
     if "a_g_first" not in st.session_state:
         reset_state(defaults_from(cd))
@@ -322,6 +372,8 @@ with st.sidebar:
         st.slider(T("资本开支 / 营收（%）"), 0.0, cx_hi, key="a_capex_pct", step=0.1,
                   help=T("默认取近三年中位数与折旧率的较大者，即长期至少覆盖折旧"))
         st.slider(T("营运资金增加 / 营收增量（%）"), 0.0, 60.0, key="a_nwc_pct", step=0.5)
+        st.slider(T("分红率（%）"), 0.0, 100.0, key="a_payout", step=5.0,
+                  help=T("只影响计算表中预测资产负债表的净现金与权益，不影响折现法"))
 
     with st.expander(T("折现率")):
         st.number_input(T("无风险利率（%）"), key="a_rf", step=0.05, format="%.2f",
@@ -341,10 +393,13 @@ with st.sidebar:
 
 A = current_assumptions()
 
-# ─────────────────────────── 计算
+# ─────────────────────────── 计算（逐年假设 = 侧栏插值 + 计算表中的手动修改）
 wc = M.wacc(A, bs["有息负债"], mcap_wan)
 W = wc["WACC"]
-fc = M.forecast(rev0, base_year, A)
+OVR = st.session_state.get("ovr", {})
+drv = M.drivers(A, OVR)
+fc = M.forecast(rev0, base_year, A, drv)
+st.session_state["fc_cols"] = list(fc["年份"])
 ncd = M.net_cash(bs, A)
 try:
     D = M.dcf(fc, W, A.g_term, ncd["净现金"], shares_wan)
@@ -366,8 +421,8 @@ iw = M.implied_wacc(fc, A.g_term, ncd["净现金"], shares_wan, q["price"])
 
 # ─────────────────────────── 页眉
 chg = q.get("chg_pct", 0) or 0
-chg_color = ("#c00000" if chg > 0 else "#008000" if chg < 0 else "#555") if not is_en() else \
-            ("#008000" if chg > 0 else "#c00000" if chg < 0 else "#555")
+chg_color = (RED if chg > 0 else GREEN if chg < 0 else GREY) if not is_en() else \
+            (GREEN if chg > 0 else RED if chg < 0 else GREY)
 src_txt = {"demo": T("演示快照"), "live": T("实时"), "pdf": T("年报 PDF")}[mode]
 st.markdown(
     f"### {q['name']}（{q['code']}）"
@@ -376,7 +431,7 @@ st.markdown(
     f"<span class='hdr-sub'>{T(q.get('industry', ''))}　·　{T('数据时间')} {cd.get('asof', '')}　·　{src_txt}</span>",
     unsafe_allow_html=True)
 
-tabs = st.tabs(TL(["首页", "历史财务", "盈利预测与折现法", "敏感性分析", "导出 Excel"]))
+tabs = st.tabs(TL(["首页", "计算表", "历史财务", "敏感性分析", "导出 Excel"]))
 
 # ═══════════════ 敏感性分析（蒙特卡洛）——首页要用，先算
 with tabs[3]:
@@ -438,13 +493,13 @@ with tabs[3]:
                                help=T("永续增长率的不确定性，默认 0.5 个百分点"))
 
     MC = M.monte_carlo(rev0, A, W, ncd["净现金"], shares_wan, emp["增速标准差"],
-                       emp["利润率标准差"], emp["相关系数"], y1_scale, n=sims, sig_w=sig_w, sig_gt=sig_gt)
+                       emp["利润率标准差"], emp["相关系数"], y1_scale, n=sims, sig_w=sig_w, sig_gt=sig_gt, drv=drv)
     ps_pct = M.pct_table(MC["每股价值"])
     np_pct = M.pct_table(MC["第1年归母净利润"])
     p_above = float((MC["每股价值"] > q["price"]).mean())
     share = M.uncertainty_share(MC["抽样"], MC["每股价值"])
     tor = M.tornado(A, rev0, base_year, bs, mcap_wan, shares_wan, emp["增速标准差"], emp["利润率标准差"],
-                    max(sig_w, 0.5), max(sig_gt, 0.25))
+                    max(sig_w, 0.5), max(sig_gt, 0.25), drv=drv)
 
     # ── 2. 模拟结果
     st.markdown("#### " + T("模拟结果：每股价值的分布"))
@@ -484,8 +539,8 @@ with tabs[3]:
     base_r, base_c = f"{W:.2f}%", f"{A.g_term:.1f}%"
     sens_show = sens.copy()
     sens_show.index.name = T("折现率 \\ 永续增长率")
-    st.dataframe(sens_show.style.format("{:.2f}", na_rep="—").apply(
-        lambda s: ["background-color:#e6e6e6;font-weight:600" if (s.name == base_r and c_ == base_c)
+    st.dataframe(sens_show.fillna(NA).style.format(na_fmt(lambda v: f"{v:.2f}")).apply(
+        lambda s: [f"background-color:{C['hi']};font-weight:600" if (s.name == base_r and c_ == base_c)
                    else "" for c_ in s.index], axis=1), width="stretch")
 
     # ── 5. 参数估计细节
@@ -624,8 +679,8 @@ with tabs[0]:
 
     # ── 现价隐含了什么（反向拆解）
     st.markdown("#### " + T("现价隐含了什么"))
-    brg = M.bridge(A, rev0, base_year, bs, mcap_wan, shares_wan)
-    imp = M.implied_single(A, rev0, base_year, bs, mcap_wan, shares_wan, q["price"])
+    brg = M.bridge(A, rev0, base_year, bs, mcap_wan, shares_wan, drv)
+    imp = M.implied_single(A, rev0, base_year, bs, mcap_wan, shares_wan, q["price"], drv)
     b1, b2 = st.columns([3, 2])
     with b1:
         fb_ = go.Figure(go.Bar(
@@ -633,9 +688,9 @@ with tabs[0]:
             marker_color=[DARK if v >= q["price"] else GREY for v in brg["每股价值"]],
             text=[f"{v:.2f}（WACC {w:.1f}%）" for v, w in zip(brg["每股价值"], brg["折现率%"])],
             textposition="outside"))
-        fb_.add_vline(x=q["price"], line_dash="dash", line_color="#c00000",
+        fb_.add_vline(x=q["price"], line_dash="dash", line_color=RED,
                       annotation_text=T("现价 {p:.2f}", p=q["price"]), annotation_position="top",
-                      annotation_font_color="#c00000")
+                      annotation_font_color=RED)
         fb_.update_layout(**{**LAYOUT, "height": 320}, title=T("逐步放宽假设后的每股价值（累积）"),
                           yaxis=dict(autorange="reversed"),
                           xaxis=dict(range=[0, max(brg["每股价值"].max(), q["price"]) * 1.35]))
@@ -686,12 +741,12 @@ with tabs[0]:
     st.markdown(T(
         "- **折现法**：折现率 {w:.2f}%（股权成本 {ke:.2f}%，贝塔 {b:.2f}），永续增长率 {g:.2f}%，"
         "得到每股 {v:.2f} 元；终值占企业价值 {tv:.1f}%。其中净现金贡献 {nc:.2f} 元/股，占每股价值的 {ncp:.0%}。\n"
-        "- **现价隐含折现率**：要让折现法结果等于现价 {px:.2f} 元，折现率需为 {iw:.2f}%，模型用的是 {w:.2f}%。\n"
+        "- **现价隐含折现率**：要让折现法结果等于现价 {px:.2f} 元，折现率需为 {iw}，模型用的是 {w:.2f}%。\n"
         "- **蒙特卡洛**：{n:,} 次模拟（参数来源：{src}），折现法每股价值中位数 {p50:.2f} 元，"
         "90% 的结果落在 {p5:.2f}–{p95:.2f} 元。",
         w=W, ke=wc["股权成本"], b=A.beta, g=A.g_term, v=D["每股价值"], tv=D["终值占比%"],
         nc=ncd["净现金"] / shares_wan, ncp=ncd["净现金"] / shares_wan / D["每股价值"],
-        px=q["price"], iw=iw, n=sims, src=emp["方法"], p50=ps_pct["P50"], p5=ps_pct["P5"], p95=ps_pct["P95"]))
+        px=q["price"], iw=f"{iw:.2f}%" if iw == iw else T("无解（任何折现率都达不到）"), n=sims, src=emp["方法"], p50=ps_pct["P50"], p5=ps_pct["P5"], p95=ps_pct["P95"]))
     if fc["FCFF"].iloc[-1] < 0:
         st.warning(T("FCFF_NEG", cx=A.capex_pct, da=A.da_pct))
     if W - A.g_term < 4:
@@ -712,14 +767,14 @@ with tabs[0]:
                      hide_index=True, width="stretch")
 
 # ═══════════════ 历史财务
-with tabs[1]:
+with tabs[2]:
     show = ["营业总收入", "营收增速%", "毛利率%", "核心经营利润", "核心经营利润率%", "投资收益及其他",
             "利润总额", "有效税率%", "归母净利润", "扣非归母净利润", "非经常性损益", "研发费用率%",
             "经营现金流", "货币资金", "交易性金融资产", "有息负债", "金融资产占总资产%"]
     t = tr_index(an[show].T.astype(float))
     t.columns = [f"{c}A" for c in t.columns]
     st.markdown("#### " + T("主要财务数据（万元 / %）"))
-    st.dataframe(t.style.format(lambda v: fmt(v), na_rep="—"), width="stretch", height=36 * (len(t) + 1) + 3)
+    st.dataframe(t.fillna(NA).style.format(na_fmt(fmt)), width="stretch", height=36 * (len(t) + 1) + 3)
 
     rc = M.regression_check(an.loc[base_year])
     st.markdown("#### " + T("模型结构回归检验"))
@@ -770,14 +825,149 @@ with tabs[1]:
     st.markdown("#### " + T("杜邦拆解"))
     du = M.dupont(an)
     du.index = [f"{i}A" for i in du.index]
-    st.dataframe(tr_index(du.T.astype(float)).style.format(lambda v: fmt(v, 2), na_rep="—"), width="stretch")
+    st.dataframe(tr_index(du.T.astype(float)).fillna(NA).style.format(na_fmt(lambda v: fmt(v, 2))), width="stretch")
     st.markdown(f"<div class='note'>{T('DUPONT_NOTE')}</div>", unsafe_allow_html=True)
 
-# ═══════════════ 盈利预测与折现法
-with tabs[2]:
+# ═══════════════ 计算表：逐年假设 → 三张表 → 自由现金流 → 估值结论
+PCT_ROWS = {"营收增速%", "核心经营利润率%", "有效税率%", "营运资本/营收%", "资本开支/营收%", "折旧摊销/营收%"}
+INPUT_ROWS = {"营收增速%": "g", "核心经营利润率%": "m", "投资收益及其他": "other",
+              "资本开支/营收%": "capex", "折旧摊销/营收%": "da"}
+BOLD_ROWS = {"营业总收入", "利润总额", "归母净利润", "经营活动现金流", "自由现金流", "归母权益", "FCFF", "现值"}
+
+
+def style_stmt(df: pd.DataFrame, hcols: list, fcols: list):
+    """三张表的样式：历史列灰底；预测列中由假设驱动的行蓝字；手动修改过的格黄底；合计行加粗。"""
+    def css(_):
+        out = pd.DataFrame("", index=df.index, columns=df.columns)
+        for r_ in df.index:
+            for c_ in df.columns:
+                st_ = []
+                if c_ in hcols:
+                    st_.append(f"background-color:{C['hist']}")
+                if r_ in BOLD_ROWS:
+                    st_.append("font-weight:700")
+                if c_ in fcols and r_ in INPUT_ROWS:
+                    st_.append(f"color:{C['inp']};font-weight:600")
+                    i_ = fcols.index(c_)
+                    if i_ in OVR.get(INPUT_ROWS[r_], {}):
+                        st_.append(f"background-color:{C['ovr']}")
+                if r_ == "平衡检查":
+                    st_.append(f"color:{GREY};font-style:italic")
+                out.loc[r_, c_] = ";".join(st_)
+        return out
+    sty = df.astype(float).fillna(NA).style.apply(css, axis=None)
+    for r_ in df.index:
+        f_ = (lambda v: f"{v:.2f}%") if r_ in PCT_ROWS else \
+             ((lambda v: f"{v:.4f}") if r_ == "折现因子" else (lambda v: fmt(v)))
+        sty = sty.format(na_fmt(f_), subset=pd.IndexSlice[[r_], :])
+    return sty.format_index(lambda x: T(x), axis=0)
+
+
+with tabs[1]:
+    st.markdown(
+        f"<span class='legend-chip' style='color:{C['inp']};font-weight:600;border:1px solid {C['grid']}'>"
+        f"{T('蓝字 = 由假设驱动')}</span>"
+        f"<span class='legend-chip' style='background:{C['ovr']}'>{T('黄底 = 手动修改过')}</span>"
+        f"<span class='legend-chip' style='background:{C['hist']};border:1px solid {C['grid']}'>"
+        f"{T('灰底 = 历史实际')}</span>", unsafe_allow_html=True)
+
+    # ── 1. 逐年假设
+    st.markdown("#### " + T("关键假设（逐年，可直接修改）"))
+    h_ = an.tail(4)
+    hcols, fcols = [f"{y}A" for y in h_.index], list(fc["年份"])
+    hist_v = {"g": h_["营收增速%"], "m": h_["核心经营利润率%"], "other": h_["投资收益及其他"],
+              "capex": h_["资本开支/营收%"], "da": h_["折旧摊销/营收%"]}
+    erows = []
+    for k_, _ in DRV_ROWS:
+        hv, fv = [float(x) for x in hist_v[k_]], [float(x) for x in drv[k_]]
+        erows.append({**dict(zip(hcols, hv)), **dict(zip(fcols, fv)), "走势": [x for x in hv + fv if x == x]})
+    edf = pd.DataFrame(erows, index=TL([lab_ for _, lab_ in DRV_ROWS]))
+    cfg = {c_: st.column_config.NumberColumn(c_, format="%.2f") for c_ in hcols + fcols}
+    cfg["走势"] = st.column_config.LineChartColumn(T("走势（历史 → 预测）"), width="medium")
+    st.data_editor(edf, key=f"calc_editor_{st.session_state.get('ovr_ver', 0)}", on_change=on_calc_edit,
+                   width="stretch", column_config=cfg, disabled=hcols + ["走势"])
+    n_ovr = sum(len(v_) for v_ in OVR.values())
+    o1, o2 = st.columns([4, 1])
+    if n_ovr:
+        items_ = [f"{fcols[i_]} {T(dict(DRV_ROWS)[k_])}" for k_, cells in OVR.items() for i_ in sorted(cells)]
+        o1.markdown("<div class='note'>" + T("已手动修改 {n} 格：{items}。其余年份仍按左侧首末年假设线性插值。",
+                                            n=n_ovr, items="、".join(items_)) + "</div>", unsafe_allow_html=True)
+        o2.button(T("撤销全部手动修改"), on_click=clear_overrides, width="stretch")
+    else:
+        o1.markdown(f"<div class='note'>{T('CALC_EDIT_NOTE')}</div>", unsafe_allow_html=True)
+    st.markdown("<div class='note'>" + T(
+        "其余假设在左侧调整：有效税率 {tax:.1f}%、营运资本 / 营收增量 {nwc:.1f}%、投资收益计入现金流比例 {of:.0f}%、"
+        "分红率 {po:.0f}%（只影响预测资产负债表）。",
+        tax=A.tax, nwc=A.nwc_pct, of=A.other_in_fcf, po=A.payout) + "</div>", unsafe_allow_html=True)
+
+    v1, v2 = st.columns(2)
+    xs_ = hcols + fcols
+    fg = go.Figure()
+    fg.add_trace(go.Bar(x=xs_, y=list(h_["营业总收入"] / 1e4) + list(fc["营业总收入"] / 1e4),
+                        marker_color=[GREY] * len(hcols) + [LIGHT] * len(fcols),
+                        marker_line=dict(color=DARK, width=0.5), name=T("营业总收入（亿元）")))
+    fg.add_trace(go.Scatter(x=xs_, y=list(h_["营收增速%"]) + list(drv["g"]), yaxis="y2", mode="lines+markers",
+                            line=dict(color=DARK), name=T("营收增速（%，右轴）")))
+    fg.update_layout(**{**LAYOUT, "height": 300}, title=T("营收与增速：历史与预测"),
+                     yaxis2=dict(overlaying="y", side="right", showgrid=False))
+    v1.plotly_chart(fg, width="stretch")
+    fm_ = go.Figure()
+    for k_, col_, nm_, dash_ in (("m", "核心经营利润率%", "核心经营利润率", "solid"),
+                                 ("capex", "资本开支/营收%", "资本开支 / 营收", "dot"),
+                                 ("da", "折旧摊销/营收%", "折旧摊销 / 营收", "dash")):
+        fm_.add_trace(go.Scatter(x=xs_, y=list(h_[col_]) + list(drv[k_]), mode="lines+markers",
+                                 line=dict(color=DARK if k_ == "m" else GREY, dash=dash_), name=T(nm_)))
+    fm_.add_vrect(x0=fcols[0], x1=fcols[-1], fillcolor=C["hist"], opacity=0.6, line_width=0, layer="below")
+    fm_.update_layout(**{**LAYOUT, "height": 300}, title=T("利润率与资本开支（%）"))
+    v2.plotly_chart(fm_, width="stretch")
+
+    # ── 2. 历史数据来源
+    if mode == "pdf":
+        st.markdown("#### " + T("历史数据（来自上传的年报，可修改）"))
+        raw_show = raw_ed.drop(columns=[c_ for c_ in raw_ed.columns if c_ not in pdf_parser.SHOW], errors="ignore")
+        st.session_state["pdf_fields"] = list(raw_show.columns)
+        st.session_state["pdf_years"] = [int(y) for y in raw_show.index]
+        grid = raw_show.T.astype(float)
+        grid.index = TL(grid.index)
+        grid.columns = [f"{y}A" for y in grid.columns]
+        st.data_editor(grid, key=f"pdf_editor_{st.session_state.get('pdf_ver', 0)}", on_change=on_pdf_edit,
+                       width="stretch", height=36 * (len(grid) + 1) + 3,
+                       column_config={c_: st.column_config.NumberColumn(format="%.2f") for c_ in grid.columns})
+        rows_ = []
+        for r in st.session_state["pdf_reports"]:
+            pg = r["来源"]
+            rows_.append({T("文件"): r["文件"], T("报告年度"): r["年度"], T("公司"): f"{r['公司简称']} {r['公司代码']}",
+                          T("资产负债表页码"): pg.get("货币资金", "—"), T("利润表页码"): pg.get("营业总收入", "—"),
+                          T("现金流量表页码"): pg.get("经营现金流", "—"), T("补充资料页码"): pg.get("固定资产折旧", "—"),
+                          T("提示"): "；".join(tr_msg(x) for x in r["提示"]) or "—"})
+        with st.expander(T("解析来源与说明")):
+            st.dataframe(pd.DataFrame(rows_), hide_index=True, width="stretch")
+            st.markdown(f"<div class='note'>{T('PDF_MERGE_NOTE')}</div>", unsafe_allow_html=True)
+    else:
+        st.markdown(f"<div class='note'>{T('HIST_LOCK_NOTE')}</div>", unsafe_allow_html=True)
+
+    # ── 3. 三张表
+    st.markdown("#### " + T("三张表（万元）"))
+    ts = M.three_statements(an, fc, A)
+    s1, s2, s3 = st.tabs(TL(["利润表", "现金流量表", "资产负债表（经营视角）"]))
+    for tab_, key_ in ((s1, "利润表"), (s2, "现金流量表"), (s3, "资产负债表")):
+        with tab_:
+            df_ = ts[key_]
+            st.dataframe(style_stmt(df_, ts["历史列"], ts["预测列"]), width="stretch",
+                         height=36 * (len(df_) + 1) + 3)
+            st.markdown(f"<div class='note'>{T('STMT_NOTE_' + key_)}</div>", unsafe_allow_html=True)
+
+    # ── 4. 自由现金流与折现
+    st.markdown("#### " + T("自由现金流与折现（万元）"))
+    fcf_t = fc.set_index("年份")[["NOPAT", "折旧摊销", "资本开支", "营运资金增加", "FCFF"]].T
+    fcf_t.loc["折现因子"] = D["折现因子"]
+    fcf_t.loc["现值"] = D["现值"]
+    fcf_t[T("终值")] = [np.nan, np.nan, np.nan, np.nan, D["终值"], D["折现因子"][-1], D["终值现值"]]
+    st.dataframe(style_stmt(fcf_t.astype(float), [], []), width="stretch", height=36 * (len(fcf_t) + 1) + 3)
+    st.markdown(f"<div class='note'>{T('FCFF_NOTE')}</div>", unsafe_allow_html=True)
     l, r = st.columns([1, 1])
     with l:
-        st.markdown("#### " + T("折现率"))
+        st.markdown("**" + T("折现率") + "**")
         st.dataframe(pd.DataFrame({
             T("项目"): TL(["无风险利率", "贝塔", "市场风险溢价", "规模溢价", "股权成本",
                          "税后债务成本", "债务权重", "折现率 WACC"]),
@@ -788,7 +978,7 @@ with tabs[2]:
                          "Rf + β×ERP + 规模溢价", "Kd × (1 − 税率)", "有息负债 ÷（有息负债 + 市值）", ""])}),
             hide_index=True, width="stretch")
     with r:
-        st.markdown("#### " + T("估值桥"))
+        st.markdown("**" + T("估值桥") + "**")
         st.markdown("<div class='formula'>" + T(
             "预测期现值合计　{pv}<br>"
             "终值 = {f} × (1 + {g:.2f}%) ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>"
@@ -803,23 +993,27 @@ with tabs[2]:
             eq=fmt(D["股权价值"]), sh=fmt(shares_wan), ps=D["每股价值"]) + "</div>", unsafe_allow_html=True)
         st.caption(T("金额单位：万元；净现金取 {d} 资产负债表", d=bs["报告期"]))
 
-    st.markdown("#### " + T("盈利预测与自由现金流（万元）"))
-    ft = fc.set_index("年份").T
-    base_col = pd.Series({
-        "营收增速%": an.loc[base_year, "营收增速%"], "营业总收入": rev0,
-        "核心经营利润率%": an.loc[base_year, "核心经营利润率%"],
-        "核心经营利润": an.loc[base_year, "核心经营利润"],
-        "投资收益及其他": an.loc[base_year, "投资收益及其他"],
-        "利润总额": an.loc[base_year, "利润总额"], "归母净利润": an.loc[base_year, "归母净利润"]})
-    ft.insert(0, f"{base_year}A", base_col)
-    ft.loc["折现因子"] = [np.nan] + list(D["折现因子"])
-    ft.loc["现值"] = [np.nan] + list(D["现值"])
-    ft = tr_index(ft.astype(float))
-    st.dataframe(ft.style.format(lambda v: fmt(v, 4) if abs(v) < 1.5 and v != 0 else fmt(v), na_rep="—"),
-                 width="stretch", height=36 * (len(ft) + 1) + 3)
-    st.markdown(f"<div class='note'>{T('FCFF_NOTE')}</div>", unsafe_allow_html=True)
-
-    st.caption(T("折现率 × 永续增长率的敏感性表、龙卷风图和蒙特卡洛模拟见「敏感性分析」页签。"))
+    # ── 5. 估值结论
+    st.markdown("#### " + T("估值结论"))
+    kk = st.columns(4)
+    kk[0].metric(T("每股内在价值（元）"), fmt(D["每股价值"]), T("{p:+.1%} vs 现价", p=D["每股价值"] / q["price"] - 1),
+                 delta_color="off", border=True)
+    kk[1].metric(T("蒙特卡洛 90% 区间（元）"), f"{ps_pct['P5']:.1f} – {ps_pct['P95']:.1f}", border=True)
+    kk[2].metric(T("价值高于现价的概率"), f"{p_above:.1%}", border=True)
+    kk[3].metric(T("现价隐含折现率"), f"{iw:.2f}%" if iw == iw else "—", T("模型 {w:.2f}%", w=W),
+                 delta_color="off", border=True)
+    t0 = tor.iloc[0]
+    lines_ = [T("VERDICT_1", name=q["name"], v=D["每股价值"], px=q["price"],
+                dir=T("高于") if D["每股价值"] >= q["price"] else T("低于"),
+                x=abs(D["每股价值"] / q["price"] - 1), p5=ps_pct["P5"], p95=ps_pct["P95"], pa=p_above),
+              T("VERDICT_2", tv=D["终值占比%"], nc=ncd["净现金"] / shares_wan,
+                ncp=ncd["净现金"] / shares_wan / D["每股价值"] if D["每股价值"] else float("nan")),
+              T("VERDICT_3", f=T(t0["因素"]), r=t0["变动幅度"], lo=t0["低"], hi=t0["高"]),
+              (T("VERDICT_4", iw=iw, w=W) if iw == iw else T("VERDICT_4N"))]
+    if n_ovr:
+        lines_.append(T("其中 {n} 个逐年假设为手动修改（见上方黄底单元格）。", n=n_ovr))
+    st.markdown("<div class='verdict'>" + "<br>".join("· " + x for x in lines_) + "</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='note'>{T('VERDICT_NOTE')}</div>", unsafe_allow_html=True)
 
 # ═══════════════ 导出
 with tabs[4]:
@@ -827,7 +1021,7 @@ with tabs[4]:
     st.markdown(T("Excel 中的预测、折现法、敏感性均为**活公式**：蓝色为输入，改动「假设」表任一蓝色单元格，"
                   "全部结果自动重算。蒙特卡洛结果以数值形式附上。当前语言决定 Excel 的语言。"))
     xls = export.build_workbook({**cd, "quote": q}, A, dict(
-        wacc=wc, dcf=D, mc_ps=ps_pct, sig_w=sig_w, sig_gt=sig_gt, mc_np=np_pct, emp=emp, y1_scale=y1_scale, sims=sims,
+        wacc=wc, dcf=D, mc_ps=ps_pct, sig_w=sig_w, sig_gt=sig_gt, drv=drv, mc_np=np_pct, emp=emp, y1_scale=y1_scale, sims=sims,
         mc_sg=MC["增速σ"], mc_sm=MC["利润率σ"]))
     st.download_button(T("下载 Excel 估值模型"), xls,
                        file_name=T("{n}_{c}_估值模型.xlsx", n=q["name"], c=q["code"]),
@@ -838,7 +1032,7 @@ with tabs[4]:
     t1_, t2_ = st.columns(2)
     t1_.download_button(T("下载已填入本公司数据的模板（中文）"),
                         template.build_template({"name": q["name"], "code": q["code"], "annual": an, "A": A,
-                                                 "bs": bs, "quote": q}),
+                                                 "bs": bs, "quote": q, "drv": drv, "ovr": OVR}),
                         file_name=f"DCF估值模板_{q['name']}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         width="stretch", help=T("TEMPLATE_FILLED_HELP"))
