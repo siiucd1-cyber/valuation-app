@@ -57,8 +57,13 @@ def tr_msg(s: str) -> str:
 
 
 ZH = {
-    "CALC_EDIT_NOTE": ("预测年份（E 列）的数字可以直接修改，改完即时重算三张表、折现法、蒙特卡洛和敏感性分析；"
-                       "历史列（A 列）为财报实际值，仅供参考。修改过的格在下方三张表中以黄底标出。"),
+    "STMT_EDIT_NOTE": ("点击蓝色格子即可直接修改（营收增速、核心经营利润率、投资收益及其他、资本开支 / 营收、折旧摊销 / 营收），"
+                       "回车后三张表、折现法、蒙特卡洛与敏感性分析全部重算，改过的格子变成黄底；清空格子即恢复默认。"
+                       "历史列来自财报接口，锁定不可修改；如需使用自己核对过的数据，请在左侧选择「上传年报 PDF」。"),
+    "STMT_EDIT_NOTE_PDF": ("点击蓝色格子即可直接修改：预测列的蓝色行是假设，历史列的蓝色行是从年报识别出的科目（识别有误时可在此更正）。"
+                           "回车后全部重算，改过的格子变成黄底；清空假设格即恢复默认。"),
+    "CALC_EDIT_NOTE": ("点击预测年份（E 列）的蓝色格子直接修改，回车后三张表、折现法、蒙特卡洛和敏感性分析即时重算；"
+                       "历史列（A 列）为财报实际值，仅供参考。改过的格子显示为黄底。"),
     "HIST_LOCK_NOTE": "历史数据来自财报接口，保持与披露一致，不可修改。若要使用自己核对过的数据，可在左侧选择「上传年报 PDF」，识别结果可以逐项修改。",
     "SHARES_HELP": "年报中识别到的股本会自动使用；未识别到或想用其他股本（如非上市公司的注册资本折算股数）时在此填写。",
     "STMT_NOTE_利润表": ("核心经营利润 = 营业总收入 − 营业总成本；投资收益及其他 = 利润总额 − 核心经营利润（含理财收益、补助等）。"
@@ -612,6 +617,15 @@ EN = {
                  "revenue ({da:.1f}%), and the model carries that ratio into perpetuity. Lower capex towards a maintenance "
                  "level close to D&A under “Capex & working capital” on the left."),
     # ── 计算表
+    "蓝字 = 可直接修改": "Blue = editable",
+    "STMT_EDIT_NOTE": ("Click a blue cell to edit it (revenue growth, core margin, investment income & other, capex / revenue, "
+                       "D&A / revenue). After Enter, the statements, DCF, Monte Carlo and sensitivity all recalculate and the "
+                       "edited cell turns yellow; clear a cell to restore the default. Historical columns come from the data "
+                       "endpoint and are locked; to use figures you have checked, choose “Upload annual report PDF”."),
+    "STMT_EDIT_NOTE_PDF": ("Click a blue cell to edit it: blue rows in forecast columns are assumptions, blue rows in historical "
+                           "columns are line items extracted from the reports (correct them here if needed). Everything "
+                           "recalculates after Enter and edited cells turn yellow; clear an assumption cell to restore the default."),
+    "年报原始科目（全部年份，可修改）": "All extracted line items (all years, editable)",
     "计算表": "Model",
     "蓝字 = 由假设驱动": "Blue = driven by assumptions", "黄底 = 手动修改过": "Yellow = edited",
     "灰底 = 历史实际": "Grey = historical actual",
@@ -623,9 +637,8 @@ EN = {
     "已手动修改 {n} 格：{items}。其余年份仍按左侧首末年假设线性插值。":
         "{n} cell(s) edited: {items}. Other years still interpolate between the first- and last-year assumptions on the left.",
     "撤销全部手动修改": "Undo all edits",
-    "CALC_EDIT_NOTE": ("Forecast cells (E columns) can be edited directly; the statements, DCF, Monte Carlo and sensitivity "
-                       "recalculate at once. Historical columns (A) are reported figures for reference. Edited cells are "
-                       "highlighted in yellow in the statements below."),
+    "CALC_EDIT_NOTE": ("Click a blue forecast cell (E columns) to edit it; after Enter the statements, DCF, Monte Carlo and "
+                       "sensitivity recalculate. Historical columns (A) are reported figures for reference. Edited cells turn yellow."),
     "其余假设在左侧调整：有效税率 {tax:.1f}%、营运资本 / 营收增量 {nwc:.1f}%、投资收益计入现金流比例 {of:.0f}%、分红率 {po:.0f}%（只影响预测资产负债表）。":
         "Other assumptions are set on the left: effective tax {tax:.1f}%, working capital / revenue increase {nwc:.1f}%, "
         "investment income counted in cash flow {of:.0f}%, payout ratio {po:.0f}% (forecast balance sheet only).",

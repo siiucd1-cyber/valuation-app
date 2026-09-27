@@ -13,6 +13,7 @@ import datetime as dt
 import io
 import json
 import os
+import threading
 import warnings
 
 import numpy as np
@@ -30,16 +31,28 @@ WAN = 1e4
 
 
 # ─────────────────────────── 基础工具
+_AK_LOCK = threading.Lock()
+
+
 def retry(fn, tries: int = 3, wait: float = 1.5, timeout: float = 45):
     """东方财富接口对连续请求会限流，失败后退避重试。
-    akshare 内部请求不设超时，接口无响应时会一直挂起，所以每次调用放进独立线程并限时。"""
+    akshare 内部请求不设超时，接口无响应时会一直挂起，所以每次调用放进独立线程并限时。
+    所有调用经同一把锁串行执行：新浪接口依赖的 JS 引擎（mini_racer）被两个线程同时初始化会使整个进程崩溃。"""
     import time
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FTimeout
+
+    def locked():
+        if not _AK_LOCK.acquire(timeout=timeout):
+            raise RuntimeError("接口繁忙，请稍后重试")
+        try:
+            return fn()
+        finally:
+            _AK_LOCK.release()
     last = None
     for i in range(tries):
         ex = ThreadPoolExecutor(max_workers=1)
         try:
-            return ex.submit(fn).result(timeout=timeout)
+            return ex.submit(locked).result(timeout=timeout)
         except FTimeout:
             last = RuntimeError(f"接口超时（{timeout:.0f} 秒无响应）")
         except Exception as e:  # noqa: BLE001
@@ -127,9 +140,16 @@ def fetch_prices(code: str, years: int = 3) -> pd.Series:
 
 
 def fetch_index() -> pd.Series:
+    """沪深300 日线：优先东方财富（纯 HTTP）；失败再用新浪（需 JS 引擎解码）。"""
     import akshare as ak
-    df = retry(lambda: ak.stock_zh_index_daily(symbol="sh000300"))
-    return df.assign(d=pd.to_datetime(df["date"])).set_index("d")["close"].astype(float)
+    start = (dt.date.today() - dt.timedelta(days=365 * 3)).strftime("%Y%m%d")
+    try:
+        df = retry(lambda: ak.index_zh_a_hist(symbol="000300", period="daily", start_date=start,
+                                               end_date=dt.date.today().strftime("%Y%m%d")), tries=1, timeout=12)
+        return df.assign(d=pd.to_datetime(df["日期"])).set_index("d")["收盘"].astype(float)
+    except Exception:  # noqa: BLE001
+        df = retry(lambda: ak.stock_zh_index_daily(symbol="sh000300"))
+        return df.assign(d=pd.to_datetime(df["date"])).set_index("d")["close"].astype(float)
 
 
 def fetch_rf() -> float:

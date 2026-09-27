@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
 
 import numpy as np
@@ -30,11 +31,12 @@ except Exception:  # noqa: BLE001
 if DARK_MODE:
     GREY, DARK, LIGHT, RED, GREEN = "#a8a8a8", "#ececec", "#5c5c5c", "#ff6b6b", "#4cd28a"
     C = dict(label="#bdbdbd", note="#a9a9a9", box="rgba(255,255,255,0.07)", hi="rgba(255,255,255,0.16)",
-             hist="rgba(255,255,255,0.05)", inp="#7fb2ff", ovr="rgba(255,196,0,0.28)", grid="rgba(255,255,255,0.12)")
+             hist="rgba(255,255,255,0.05)", inp="#7fb2ff", ovr="rgba(255,196,0,0.28)", grid="rgba(255,255,255,0.12)",
+             inpbg="rgba(127,178,255,0.10)")
 else:
     GREY, DARK, LIGHT, RED, GREEN = "#8c8c8c", "#262626", "#d9d9d9", "#c00000", "#008000"
     C = dict(label="#555", note="#666", box="#f6f6f6", hi="#e6e6e6", hist="#f4f4f4", inp="#0b57d0",
-             ovr="#fff2b3", grid="#e9e9e9")
+             ovr="#fff2b3", grid="#e9e9e9", inpbg="rgba(11,87,208,0.06)")
 LAYOUT = dict(template="plotly_dark" if DARK_MODE else "simple_white", height=320,
               margin=dict(l=10, r=10, t=40, b=10), font=dict(size=12), legend=dict(orientation="h", y=-0.2),
               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
@@ -188,37 +190,89 @@ def clear_overrides():
     st.session_state["ovr_ver"] = st.session_state.get("ovr_ver", 0) + 1
 
 
-# 计算表中可逐年修改的假设（行顺序即编辑表的行顺序）
+# 计算表中可逐年修改的假设
 DRV_ROWS = [("g", "营收增速（%）"), ("m", "核心经营利润率（%）"), ("other", "投资收益及其他（万元）"),
             ("capex", "资本开支 / 营收（%）"), ("da", "折旧摊销 / 营收（%）")]
 
 
-def on_calc_edit():
-    """编辑表的修改写入 ovr（绝对值覆盖）；空值表示撤销该格的修改。"""
-    ed = st.session_state.get(f"calc_editor_{st.session_state.get('ovr_ver', 0)}", {})
-    cols = st.session_state.get("fc_cols", [])
-    ovr = st.session_state.setdefault("ovr", {})
-    for r_, chg in ed.get("edited_rows", {}).items():
-        k_ = DRV_ROWS[int(r_)][0]
-        for col, v in chg.items():
-            if col in cols:
-                i = cols.index(col)
-                if v is None:
-                    ovr.get(k_, {}).pop(i, None)
-                else:
-                    ovr.setdefault(k_, {})[i] = float(v)
+def sheet_grid(rows: pd.DataFrame, key: str, hcols: list, fcols: list, meta: dict, height: int | None = None):
+    """可直接在格子里修改的报表（AgGrid）。
+    rows：行 = 项目（中文原名），列 = 历史列 + 预测列；
+    meta[行名] = {"pct": 百分比行, "dec": 小数位, "bold": 加粗, "fedit": 预测列可改时对应的逐年假设名,
+                 "hedit": 历史列可改时对应的年报科目（仅上传年报时）}。
+    修改通过回调写入 session_state 的 ovr（逐年假设）或 pdf_ovr（年报科目），回调在重算之前执行，整页随即按新值重算。"""
+    from st_aggrid import AgGrid, JsCode
+    ovr_now = st.session_state.get("ovr", {})
+    pdf_now = st.session_state.get("pdf_ovr", {})
+    recs = []
+    for r_ in rows.index:
+        m = meta.get(r_, {})
+        fk, hk = m.get("fedit", ""), m.get("hedit", "")
+        rec = {"_key": r_, "_lab": T(r_), "_pct": bool(m.get("pct")), "_dec": int(m.get("dec", 2)),
+               "_bold": bool(m.get("bold")), "_fedit": fk, "_hedit": hk,
+               "_ovr": ",".join(fcols[i] for i in ovr_now.get(fk, {}) if i < len(fcols)) if fk else "",
+               "_hovr": ",".join(f"{y}A" for (y, f) in pdf_now if f == hk) if hk else ""}
+        for c_ in hcols + fcols:
+            v = rows.loc[r_, c_]
+            rec[c_] = None if (v is None or v != v) else float(v)
+        recs.append(rec)
+    df = pd.DataFrame(recs)
+    fmt_js = JsCode("""function(p){ if (p.value === null || p.value === undefined || isNaN(p.value)) return '—';
+        const v = Number(p.value);
+        if (p.data._pct) return v.toFixed(2) + '%';
+        return v.toLocaleString('en-US', {minimumFractionDigits: p.data._dec, maximumFractionDigits: p.data._dec}); }""")
+    parse_js = JsCode(r"""function(p){ const s = String(p.newValue === null || p.newValue === undefined ? '' : p.newValue)
+        .replace(/[,%\s]/g, '');
+        if (s === '') return null; const v = Number(s); return isNaN(v) ? p.oldValue : v; }""")
+    hist_style = JsCode(f"""function(p){{ const s = {{textAlign: 'right', backgroundColor: '{C["hist"]}'}};
+        if (p.data._hedit) {{ s.color = '{C["inp"]}'; s.fontWeight = '600';
+            if ((p.data._hovr || '').split(',').includes(p.colDef.field)) s.backgroundColor = '{C["ovr"]}'; }}
+        return s; }}""")
+    fc_style = JsCode(f"""function(p){{ const s = {{textAlign: 'right'}};
+        if (p.data._fedit) {{ s.color = '{C["inp"]}'; s.fontWeight = '600'; s.backgroundColor = '{C["inpbg"]}';
+            if ((p.data._ovr || '').split(',').includes(p.colDef.field)) s.backgroundColor = '{C["ovr"]}'; }}
+        return s; }}""")
+    cols = [{"field": "_lab", "headerName": T("项目"), "pinned": "left", "minWidth": 150, "flex": 1.5}]
+    cols += [{"field": c_, "headerName": c_, "valueFormatter": fmt_js, "valueParser": parse_js, "cellStyle": hist_style,
+              "editable": JsCode("function(p){ return !!p.data._hedit; }"), "minWidth": 78, "flex": 1}
+             for c_ in hcols]
+    cols += [{"field": c_, "headerName": c_, "valueFormatter": fmt_js, "valueParser": parse_js, "cellStyle": fc_style,
+              "editable": JsCode("function(p){ return !!p.data._fedit; }"), "minWidth": 78, "flex": 1}
+             for c_ in fcols]
+    cols += [{"field": c_, "hide": True} for c_ in ["_key", "_pct", "_dec", "_bold", "_fedit", "_hedit", "_ovr", "_hovr"]]
+    opts = {"columnDefs": cols, "singleClickEdit": True, "stopEditingWhenCellsLoseFocus": True,
+            "suppressMovableColumns": True, "rowHeight": 30, "headerHeight": 32,
+            "getRowStyle": JsCode("function(p){ return p.data._bold ? {fontWeight: 700} : null; }")}
 
+    def on_edit(resp):
+        ev = resp.event_data or {}
+        if ev.get("type") != "cellValueChanged":
+            return
+        row, col = ev.get("data") or {}, (ev.get("colDef") or {}).get("field")
+        v = ev.get("newValue")
+        try:
+            v = None if v is None or v == "" else float(v)
+        except (TypeError, ValueError):
+            return
+        if v is not None and v != v:
+            v = None
+        if col in fcols and row.get("_fedit"):
+            cells = st.session_state.setdefault("ovr", {}).setdefault(row["_fedit"], {})
+            i_ = fcols.index(col)
+            if v is None:
+                cells.pop(i_, None)
+            else:
+                cells[i_] = v
+        elif col in hcols and row.get("_hedit"):
+            st.session_state.setdefault("pdf_ovr", {})[(int(col.rstrip("A")), row["_hedit"])] = \
+                float("nan") if v is None else v
 
-def on_pdf_edit():
-    ed = st.session_state.get(f"pdf_editor_{st.session_state.get('pdf_ver', 0)}", {})
-    fields, years = st.session_state.get("pdf_fields", []), st.session_state.get("pdf_years", [])
-    po = st.session_state.setdefault("pdf_ovr", {})
-    for r_, chg in ed.get("edited_rows", {}).items():
-        f_ = fields[int(r_)]
-        for col, v in chg.items():
-            y_ = int(str(col).rstrip("A"))
-            if y_ in years:
-                po[(y_, f_)] = float("nan") if v is None else float(v)
+    # 修改记录变化时换一个 key 让表格重新挂载，保证黄底等样式按最新修改重新计算
+    ver = hashlib.md5(repr((sorted((k, sorted(v.items())) for k, v in ovr_now.items()),
+                            sorted(pdf_now.items()))).encode()).hexdigest()[:8]
+    AgGrid(df, gridOptions=opts, height=height or 32 + 30 * len(df) + 6, allow_unsafe_jscode=True,
+           update_on=["cellValueChanged"], key=f"{key}_{ver}", callback=on_edit, server_sync_strategy="server_wins",
+           show_toolbar=False, show_search=False, show_download_button=False, theme="streamlit")
 
 
 def current_assumptions() -> M.Assumptions:
@@ -866,30 +920,27 @@ def style_stmt(df: pd.DataFrame, hcols: list, fcols: list):
 with tabs[1]:
     st.markdown(
         f"<span class='legend-chip' style='color:{C['inp']};font-weight:600;border:1px solid {C['grid']}'>"
-        f"{T('蓝字 = 由假设驱动')}</span>"
+        f"{T('蓝字 = 可直接修改')}</span>"
         f"<span class='legend-chip' style='background:{C['ovr']}'>{T('黄底 = 手动修改过')}</span>"
         f"<span class='legend-chip' style='background:{C['hist']};border:1px solid {C['grid']}'>"
         f"{T('灰底 = 历史实际')}</span>", unsafe_allow_html=True)
 
-    # ── 1. 逐年假设
+    # ── 1. 逐年假设（汇总，可直接修改）
     st.markdown("#### " + T("关键假设（逐年，可直接修改）"))
     h_ = an.tail(4)
     hcols, fcols = [f"{y}A" for y in h_.index], list(fc["年份"])
     hist_v = {"g": h_["营收增速%"], "m": h_["核心经营利润率%"], "other": h_["投资收益及其他"],
               "capex": h_["资本开支/营收%"], "da": h_["折旧摊销/营收%"]}
-    erows = []
-    for k_, _ in DRV_ROWS:
-        hv, fv = [float(x) for x in hist_v[k_]], [float(x) for x in drv[k_]]
-        erows.append({**dict(zip(hcols, hv)), **dict(zip(fcols, fv)), "走势": [x for x in hv + fv if x == x]})
-    edf = pd.DataFrame(erows, index=TL([lab_ for _, lab_ in DRV_ROWS]))
-    cfg = {c_: st.column_config.NumberColumn(c_, format="%.2f") for c_ in hcols + fcols}
-    cfg["走势"] = st.column_config.LineChartColumn(T("走势（历史 → 预测）"), width="medium")
-    st.data_editor(edf, key=f"calc_editor_{st.session_state.get('ovr_ver', 0)}", on_change=on_calc_edit,
-                   width="stretch", column_config=cfg, disabled=hcols + ["走势"])
+    drv_rows = pd.DataFrame({lab_: {**dict(zip(hcols, [float(x) for x in hist_v[k_]])),
+                                    **dict(zip(fcols, [float(x) for x in drv[k_]]))}
+                             for k_, lab_ in DRV_ROWS}).T
+    sheet_grid(drv_rows, "grid_drv", hcols, fcols,
+               {lab_: {"pct": k_ != "other", "fedit": k_} for k_, lab_ in DRV_ROWS})
     n_ovr = sum(len(v_) for v_ in OVR.values())
     o1, o2 = st.columns([4, 1])
     if n_ovr:
-        items_ = [f"{fcols[i_]} {T(dict(DRV_ROWS)[k_])}" for k_, cells in OVR.items() for i_ in sorted(cells)]
+        items_ = [f"{fcols[i_]} {T(dict(DRV_ROWS)[k_])}" for k_, cells in OVR.items() for i_ in sorted(cells)
+                  if i_ < len(fcols)]
         o1.markdown("<div class='note'>" + T("已手动修改 {n} 格：{items}。其余年份仍按左侧首末年假设线性插值。",
                                             n=n_ovr, items="、".join(items_)) + "</div>", unsafe_allow_html=True)
         o2.button(T("撤销全部手动修改"), on_click=clear_overrides, width="stretch")
@@ -921,41 +972,54 @@ with tabs[1]:
     fm_.update_layout(**{**LAYOUT, "height": 300}, title=T("利润率与资本开支（%）"))
     v2.plotly_chart(fm_, width="stretch")
 
-    # ── 2. 历史数据来源
-    if mode == "pdf":
-        st.markdown("#### " + T("历史数据（来自上传的年报，可修改）"))
-        raw_show = raw_ed.drop(columns=[c_ for c_ in raw_ed.columns if c_ not in pdf_parser.SHOW], errors="ignore")
-        st.session_state["pdf_fields"] = list(raw_show.columns)
-        st.session_state["pdf_years"] = [int(y) for y in raw_show.index]
-        grid = raw_show.T.astype(float)
-        grid.index = TL(grid.index)
-        grid.columns = [f"{y}A" for y in grid.columns]
-        st.data_editor(grid, key=f"pdf_editor_{st.session_state.get('pdf_ver', 0)}", on_change=on_pdf_edit,
-                       width="stretch", height=36 * (len(grid) + 1) + 3,
-                       column_config={c_: st.column_config.NumberColumn(format="%.2f") for c_ in grid.columns})
-        rows_ = []
-        for r in st.session_state["pdf_reports"]:
-            pg = r["来源"]
-            rows_.append({T("文件"): r["文件"], T("报告年度"): r["年度"], T("公司"): f"{r['公司简称']} {r['公司代码']}",
-                          T("资产负债表页码"): pg.get("货币资金", "—"), T("利润表页码"): pg.get("营业总收入", "—"),
-                          T("现金流量表页码"): pg.get("经营现金流", "—"), T("补充资料页码"): pg.get("固定资产折旧", "—"),
-                          T("提示"): "；".join(tr_msg(x) for x in r["提示"]) or "—"})
-        with st.expander(T("解析来源与说明")):
-            st.dataframe(pd.DataFrame(rows_), hide_index=True, width="stretch")
-            st.markdown(f"<div class='note'>{T('PDF_MERGE_NOTE')}</div>", unsafe_allow_html=True)
-    else:
-        st.markdown(f"<div class='note'>{T('HIST_LOCK_NOTE')}</div>", unsafe_allow_html=True)
-
-    # ── 3. 三张表
+    # ── 2. 三张表（蓝色格子可直接修改；上传年报时历史科目也可修改）
     st.markdown("#### " + T("三张表（万元）"))
+    st.markdown(f"<div class='note'>{T('STMT_EDIT_NOTE_PDF' if mode == 'pdf' else 'STMT_EDIT_NOTE')}</div>",
+                unsafe_allow_html=True)
     ts = M.three_statements(an, fc, A)
+    pdf_ = mode == "pdf"
+    META = {
+        "利润表": {"营业总收入": {"bold": True, "hedit": "营业总收入" if pdf_ else ""},
+                  "营收增速%": {"pct": True, "fedit": "g"},
+                  "营业总成本": {"hedit": "营业总成本" if pdf_ else ""},
+                  "核心经营利润率%": {"pct": True, "fedit": "m"},
+                  "投资收益及其他": {"fedit": "other"},
+                  "利润总额": {"bold": True, "hedit": "利润总额" if pdf_ else ""},
+                  "所得税": {"hedit": "所得税" if pdf_ else ""}, "有效税率%": {"pct": True},
+                  "净利润": {"hedit": "净利润" if pdf_ else ""},
+                  "归母净利润": {"bold": True, "hedit": "归母净利润" if pdf_ else ""}},
+        "现金流量表": {"归母净利润": {"bold": True}, "折旧摊销": {"hedit": "折旧摊销" if pdf_ else ""},
+                    "经营活动现金流": {"bold": True, "hedit": "经营现金流" if pdf_ else ""},
+                    "资本开支": {"hedit": "资本开支" if pdf_ else ""}, "自由现金流": {"bold": True},
+                    "资本开支/营收%": {"pct": True, "fedit": "capex"},
+                    "折旧摊销/营收%": {"pct": True, "fedit": "da"}},
+        "资产负债表": {"归母权益": {"bold": True}, "营运资本/营收%": {"pct": True}},
+    }
     s1, s2, s3 = st.tabs(TL(["利润表", "现金流量表", "资产负债表（经营视角）"]))
     for tab_, key_ in ((s1, "利润表"), (s2, "现金流量表"), (s3, "资产负债表")):
         with tab_:
-            df_ = ts[key_]
-            st.dataframe(style_stmt(df_, ts["历史列"], ts["预测列"]), width="stretch",
-                         height=36 * (len(df_) + 1) + 3)
+            sheet_grid(ts[key_], f"grid_{key_}", ts["历史列"], ts["预测列"], META[key_])
             st.markdown(f"<div class='note'>{T('STMT_NOTE_' + key_)}</div>", unsafe_allow_html=True)
+
+    # ── 3. 上传年报：全部原始科目（可修改）
+    if mode == "pdf":
+        with st.expander(T("年报原始科目（全部年份，可修改）")):
+            raw_show = raw_ed.drop(columns=[c_ for c_ in raw_ed.columns if c_ not in pdf_parser.SHOW],
+                                   errors="ignore")
+            rgrid = raw_show.T.astype(float)
+            rgrid.columns = [f"{y}A" for y in rgrid.columns]
+            sheet_grid(rgrid, "grid_pdf_raw", list(rgrid.columns), [], {f: {"hedit": f} for f in rgrid.index})
+            rows_ = []
+            for r in st.session_state["pdf_reports"]:
+                pg = r["来源"]
+                rows_.append({T("文件"): r["文件"], T("报告年度"): r["年度"],
+                              T("公司"): f"{r['公司简称']} {r['公司代码']}",
+                              T("资产负债表页码"): pg.get("货币资金", "—"), T("利润表页码"): pg.get("营业总收入", "—"),
+                              T("现金流量表页码"): pg.get("经营现金流", "—"),
+                              T("补充资料页码"): pg.get("固定资产折旧", "—"),
+                              T("提示"): "；".join(tr_msg(x) for x in r["提示"]) or "—"})
+            st.dataframe(pd.DataFrame(rows_), hide_index=True, width="stretch")
+            st.markdown(f"<div class='note'>{T('PDF_MERGE_NOTE')}</div>", unsafe_allow_html=True)
 
     # ── 4. 自由现金流与折现
     st.markdown("#### " + T("自由现金流与折现（万元）"))
