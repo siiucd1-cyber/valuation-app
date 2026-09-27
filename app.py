@@ -350,7 +350,7 @@ elif go_btn or "cd" not in st.session_state or st.session_state.get("key") != f"
         if mode == "demo":
             cd = fetch_demo(code)
         else:
-            with TOP.container(), st.spinner(T("正在从东方财富、新浪拉取数据（首次约 30–60 秒，之后一小时内有缓存）……")):
+            with TOP.container(), st.spinner(T("正在从东方财富、腾讯、新浪拉取数据（首次约 30–60 秒，之后一小时内有缓存）……")):
                 cd = fetch_live(code)
     except Exception as e:  # noqa: BLE001
         if os.path.exists(os.path.join(data.DEMO_DIR, f"{code}.json")):
@@ -813,7 +813,7 @@ with tabs[0]:
         st.warning(T("贝塔回归的 R² 仅 {r2:.2f}，个股与大盘几乎不相关，回归贝塔 {b:.2f} 统计上不可靠。"
                      "可在左侧「折现率」中改用 Blume 调整后贝塔 {adj:.2f} 或行业贝塔。",
                      r2=bt["r2"], b=bt["beta"], adj=0.67 * bt["beta"] + 0.33))
-    st.markdown(f"<div class='note'>{T('所有结果基于左侧假设，调整任一参数即时重算。数据来自东方财富、新浪公开接口，仅供学习研究，不构成投资建议。')}</div>",
+    st.markdown(f"<div class='note'>{T('所有结果基于左侧假设，调整任一参数即时重算。数据来自东方财富、腾讯、新浪公开接口，仅供学习研究，不构成投资建议。')}</div>",
                 unsafe_allow_html=True)
     with st.expander(T("数据获取状态")):
         st.dataframe(pd.DataFrame({T("数据项"): TL(cd["status"].keys()),

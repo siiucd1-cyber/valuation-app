@@ -86,7 +86,7 @@ ZH = {
     "FCFF_NEG": ("预测期最后一年的自由现金流为负，终值也随之为负，折现法结果没有意义。常见原因是公司处于扩张期："
                  "资本开支 / 营收（当前 {cx:.1f}%）远高于折旧摊销 / 营收（{da:.1f}%），而模型把这个比例延续到了永续期。"
                  "可在左侧「资本开支与营运资金」中把资本开支调到接近折旧的维持性水平后再看。"),
-    "MODE_HELP": ("实时数据：输入股票代码，从东方财富、新浪公开接口拉取；演示数据：预存快照，无网络也能打开；"
+    "MODE_HELP": ("实时数据：输入股票代码，从东方财富、腾讯、新浪公开接口拉取；演示数据：预存快照，无网络也能打开；"
                   "上传年报 PDF：从年报中自动抽取合并报表，适合接口取不到数据或想用原始披露数据时。"),
     "PDF_UP_HELP": "上传同一家公司的 1–6 份年度报告（沪深交易所标准格式）。多份年报可拼成更长的历史序列。",
     "PRICE_HELP": ("上市公司识别到股票代码后会自动取实时股价，这里填 0 即可；"
@@ -144,8 +144,8 @@ ZH = {
     "TEMPLATE_NOTE": ("不依赖网页的折现法模板：「历史数据」表放 5 年报表科目，历史指标和参考假设自动算出；"
                       "「假设」表填写假设后，折现法与敏感性自动计算。左边按钮下载已填好当前公司数据与假设的版本，右边是空白版。"),
     "METHOD_NOTES": (
-        "- **数据**：三张报表、单季利润表、股价、沪深300、10年期国债来自 akshare（东方财富、新浪公开接口）；"
-        "实时行情与可比公司来自东方财富行情接口。非官方授权数据，接口可能随网站改版失效。\n"
+        "- **数据**：三张报表、10年期国债来自东方财富；实时行情优先东方财富、失败时用腾讯；个股日线与沪深300 依次尝试东方财富、腾讯、新浪"
+        "（东方财富 K 线接口拒绝境外 IP，线上服务器实际走腾讯）。每项实际来源见首页「数据获取状态」。非官方授权数据，接口可能随网站改版失效。\n"
         "- **核心经营利润** =（营业总收入 − 营业总成本），营业总成本已含四项费用；"
         "**投资收益及其他** = 利润总额 − 核心经营利润。\n"
         "- **贝塔**：最近 100 周个股与沪深300 周收益率回归。\n"
@@ -161,13 +161,13 @@ EN = {
     "数据来源": "Data source",
     "实时数据": "Live",
     "演示数据（离线）": "Demo (offline)",
-    "演示数据是预存的快照，无网络也能打开；实时数据从东方财富、新浪公开接口获取。":
-        "Demo data is a saved snapshot that works offline; live data comes from Eastmoney and Sina public endpoints.",
+    "演示数据是预存的快照，无网络也能打开；实时数据从东方财富、腾讯、新浪公开接口获取。":
+        "Demo data is a saved snapshot that works offline; live data comes from Eastmoney, Tencent and Sina public endpoints.",
     "股票代码": "Stock code",
     "加载": "Load",
     "可用演示代码：": "Demo codes available: ",
-    "正在从东方财富、新浪拉取数据（首次约 30–60 秒，之后一小时内有缓存）……":
-        "Fetching data from Eastmoney and Sina (about 30–60 s the first time, cached for an hour afterwards)…",
+    "正在从东方财富、腾讯、新浪拉取数据（首次约 30–60 秒，之后一小时内有缓存）……":
+        "Fetching data from Eastmoney, Tencent and Sina (about 30–60 s the first time, cached for an hour afterwards)…",
     "实时数据获取失败，已改用演示快照。原因：{e}": "Live data failed; using the demo snapshot instead. Reason: {e}",
     "数据获取失败：{e}": "Data fetch failed: {e}",
     "恢复数据默认值": "Reset to data-driven defaults",
@@ -283,8 +283,8 @@ EN = {
         "The beta regression has an R² of only {r2:.2f}: the stock barely moves with the market, so the regression beta of {b:.2f} is statistically unreliable. Consider the Blume-adjusted beta {adj:.2f} or an industry beta under “Discount rate” on the left.",
     "终值占企业价值 {v:.0f}%，估值高度依赖永续假设，结果稳健性有限。":
         "Terminal value is {v:.0f}% of EV, so the valuation depends heavily on the perpetuity assumption.",
-    "所有结果基于左侧假设，调整任一参数即时重算。数据来自东方财富、新浪公开接口，仅供学习研究，不构成投资建议。":
-        "All results follow from the assumptions on the left and update instantly. Data comes from Eastmoney and Sina public endpoints; for study purposes only, not investment advice.",
+    "所有结果基于左侧假设，调整任一参数即时重算。数据来自东方财富、腾讯、新浪公开接口，仅供学习研究，不构成投资建议。":
+        "All results follow from the assumptions on the left and update instantly. Data comes from Eastmoney, Tencent and Sina public endpoints; for study purposes only, not investment advice.",
     "数据获取状态": "Data fetch status",
     "数据项": "Item",
     "状态": "Status",
@@ -489,9 +489,10 @@ EN = {
     "{n}_{c}_估值模型.xlsx": "{c}_valuation_model.xlsx",
     "方法与数据说明": "Method and data notes",
     "METHOD_NOTES": (
-        "- **Data**: financial statements, quarterly income statements, share prices, CSI 300 and 10-year CGB yields come "
-        "from akshare (Eastmoney and Sina public endpoints); live quotes and comparables come from the Eastmoney quote "
-        "endpoint. The data is not officially licensed and endpoints may break when the sites change.\n"
+        "- **Data**: financial statements and 10-year CGB yields come from Eastmoney; live quotes from Eastmoney with Tencent "
+        "as backup; daily prices and the CSI 300 try Eastmoney, Tencent and Sina in turn (Eastmoney's K-line endpoint rejects "
+        "overseas IPs, so the hosted app uses Tencent). The source of each item is shown under “Data fetch status” on the "
+        "dashboard. The data is not officially licensed and endpoints may break when the sites change.\n"
         "- **Core operating profit** = total revenue − total operating cost (which already includes the four expense "
         "lines); **investment income & other** = pre-tax profit − core operating profit.\n"
         "- **Beta**: regression of the last 100 weekly returns against the CSI 300.\n"
@@ -560,7 +561,7 @@ EN = {
                     "unchanged. The more extreme the required value, the harder the price's implied expectations are to meet."),
     # ── PDF 上传
     "上传年报 PDF": "Upload annual report PDF",
-    "MODE_HELP": ("Live: enter a stock code and pull data from Eastmoney and Sina public endpoints. Demo: a saved snapshot "
+    "MODE_HELP": ("Live: enter a stock code and pull data from Eastmoney, Tencent and Sina public endpoints. Demo: a saved snapshot "
                   "that works offline. Upload annual report PDF: extract the consolidated statements from annual reports, "
                   "useful when the endpoints fail or you want the original disclosures."),
     "上传年度报告 PDF（可多份）": "Upload annual report PDFs (several allowed)",
@@ -708,8 +709,8 @@ EN = {
     "模型结构": "Model structure",
     "营业总收入 × 核心经营利润率 = 核心经营利润；+ 投资收益及其他 = 利润总额；× (1 − 有效税率) × (1 − 少数股东占比) = 归母净利润。":
         "Total revenue × core operating margin = core operating profit; + investment income & other = pre-tax profit; × (1 − effective tax) × (1 − minority share) = net profit to parent.",
-    "akshare（东方财富、新浪公开接口）；东方财富行情接口。非官方授权数据。":
-        "akshare (Eastmoney and Sina public endpoints); Eastmoney quote endpoint. Not officially licensed data.",
+    "东方财富（报表、行情、国债）、腾讯（日线、行情备用）、新浪（日线备用）公开接口，经 akshare 与直接请求获取。非官方授权数据。":
+        "Eastmoney (statements, quotes, bond yields), Tencent (daily prices, backup quotes) and Sina (backup daily prices) public endpoints, via akshare and direct requests. Not officially licensed data.",
     "声明": "Disclaimer",
     "个人学习项目，结论基于用户假设，不构成投资建议。":
         "Personal study project; conclusions depend on user assumptions and are not investment advice.",
