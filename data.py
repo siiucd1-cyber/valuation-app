@@ -98,16 +98,41 @@ def _qlabel(d: pd.Timestamp) -> str:
 
 # ─────────────────────────── 单项抓取
 def fetch_quote(code: str) -> dict:
+    """实时行情：东方财富 → 腾讯（东方财富对部分境外 IP 不稳定时补上）。"""
     _, mkt = market_of(code)
     p = {"secid": f"{mkt}.{code}", "fltt": 2, "invt": 2,
          "fields": "f43,f57,f58,f84,f116,f127,f167,f170"}
-    j = retry(lambda: requests.get(QUOTE_URL, params=p, headers=UA, timeout=10).json()["data"])
-    if not j or j.get("f58") in (None, "-"):
+    try:
+        j = retry(lambda: requests.get(QUOTE_URL, params=p, headers=UA, timeout=10).json()["data"],
+                  tries=2, timeout=12)
+        if not j or j.get("f58") in (None, "-"):
+            raise RuntimeError("行情接口未返回该代码的数据")
+        return {"code": j["f57"], "name": j["f58"], "price": float(j["f43"]),
+                "shares": float(j["f84"]), "mcap_yi": float(j["f116"]) / 1e8,
+                "industry": j.get("f127") or "", "pb": float(j["f167"]),
+                "chg_pct": float(j["f170"]), "src": "东方财富",
+                "ts": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    except Exception:  # noqa: BLE001
+        return fetch_quote_tencent(code)
+
+
+def fetch_quote_tencent(code: str) -> dict:
+    """腾讯实时行情（qt.gtimg.cn），字段以 ~ 分隔：1 名称、3 现价、32 涨跌幅%、45 总市值（亿元）、46 市净率、73 总股本。"""
+    pre, _ = market_of(code)
+
+    def get():
+        r = requests.get("https://qt.gtimg.cn/q=" + f"{pre.lower()}{code}", headers=UA, timeout=10)
+        r.encoding = "gbk"
+        return r.text
+    txt = retry(get, tries=2, timeout=12)
+    if '"' not in txt or len(txt.split('"')[1].split("~")) < 74:
         raise RuntimeError("行情接口未返回该代码的数据")
-    return {"code": j["f57"], "name": j["f58"], "price": float(j["f43"]),
-            "shares": float(j["f84"]), "mcap_yi": float(j["f116"]) / 1e8,
-            "industry": j.get("f127") or "", "pb": float(j["f167"]),
-            "chg_pct": float(j["f170"]),
+    f = txt.split('"')[1].split("~")
+    num = lambda i: float(f[i]) if f[i] not in ("", "-") else float("nan")
+    price, mcap = num(3), num(45)
+    shares = num(73) if num(73) == num(73) and num(73) > 0 else mcap * 1e8 / price
+    return {"code": f[2], "name": f[1], "price": price, "shares": shares, "mcap_yi": mcap,
+            "industry": "", "pb": num(46), "chg_pct": num(32), "src": "腾讯",
             "ts": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 
@@ -125,31 +150,65 @@ def fetch_statements(code: str) -> dict[str, pd.DataFrame]:
     return out
 
 
+TENCENT_KLINE = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+
+
+def _tag(s: pd.Series, src: str) -> pd.Series:
+    s.attrs["src"] = src
+    return s
+
+
+def fetch_kline_tencent(symbol: str, start: str, adjust: str = "qfq") -> pd.Series:
+    """腾讯日线（纯 JSON，境外可访问，不依赖 JS 引擎）。symbol 形如 sh688230 / sz000001 / sh000300。
+    单次最多返回约 2000 条，这里按需一次取完。"""
+    s0 = pd.Timestamp(start).strftime("%Y-%m-%d")
+    p = {"param": f"{symbol},day,{s0},{dt.date.today():%Y-%m-%d},2000,{adjust}"}
+    j = retry(lambda: requests.get(TENCENT_KLINE, params=p, headers=UA, timeout=10).json(), tries=2, timeout=15)
+    node = (j.get("data") or {}).get(symbol) or {}
+    rows = node.get(f"{adjust}day") or node.get("day") or []
+    if not rows:
+        raise RuntimeError("腾讯行情接口未返回日线数据")
+    s = pd.Series({pd.Timestamp(r[0]): float(r[2]) for r in rows}).sort_index()
+    return s[s.index >= pd.Timestamp(start)]
+
+
 def fetch_prices(code: str, years: int = 3) -> pd.Series:
+    """个股前复权收盘价：东方财富 → 腾讯 → 新浪。
+    东方财富 K 线接口（push2his）拒绝境外 IP（包括 Streamlit Cloud 的美国服务器），此时由腾讯接口补上；
+    新浪需 JS 引擎解码，放在最后。"""
     import akshare as ak
     start = (dt.date.today() - dt.timedelta(days=365 * years)).strftime("%Y%m%d")
+    pre, _ = market_of(code)
     try:
         df = retry(lambda: ak.stock_zh_a_hist(symbol=code, period="daily",
-                                              start_date=start, adjust="qfq"), tries=2)
-        return df.assign(d=pd.to_datetime(df["日期"])).set_index("d")["收盘"].astype(float)
-    except Exception:
-        pre, _ = market_of(code)
+                                              start_date=start, adjust="qfq"), tries=1, timeout=12)
+        return _tag(df.assign(d=pd.to_datetime(df["日期"])).set_index("d")["收盘"].astype(float), "东方财富")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return _tag(fetch_kline_tencent(f"{pre.lower()}{code}", start), "腾讯")
+    except Exception:  # noqa: BLE001
         df = retry(lambda: ak.stock_zh_a_daily(symbol=f"{pre.lower()}{code}", adjust="qfq"))
         s = df.assign(d=pd.to_datetime(df["date"])).set_index("d")["close"].astype(float)
-        return s[s.index >= pd.Timestamp(start)]
+        return _tag(s[s.index >= pd.Timestamp(start)], "新浪")
 
 
 def fetch_index() -> pd.Series:
-    """沪深300 日线：优先东方财富（纯 HTTP）；失败再用新浪（需 JS 引擎解码）。"""
+    """沪深300 日线：东方财富 → 腾讯 → 新浪（同上）。"""
     import akshare as ak
     start = (dt.date.today() - dt.timedelta(days=365 * 3)).strftime("%Y%m%d")
     try:
         df = retry(lambda: ak.index_zh_a_hist(symbol="000300", period="daily", start_date=start,
                                                end_date=dt.date.today().strftime("%Y%m%d")), tries=1, timeout=12)
-        return df.assign(d=pd.to_datetime(df["日期"])).set_index("d")["收盘"].astype(float)
+        return _tag(df.assign(d=pd.to_datetime(df["日期"])).set_index("d")["收盘"].astype(float), "东方财富")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return _tag(fetch_kline_tencent("sh000300", start, adjust=""), "腾讯")
     except Exception:  # noqa: BLE001
         df = retry(lambda: ak.stock_zh_index_daily(symbol="sh000300"))
-        return df.assign(d=pd.to_datetime(df["date"])).set_index("d")["close"].astype(float)
+        s = df.assign(d=pd.to_datetime(df["date"])).set_index("d")["close"].astype(float)
+        return _tag(s[s.index >= pd.Timestamp(start)], "新浪")
 
 
 def fetch_rf() -> float:
@@ -323,15 +382,15 @@ def load_market(code: str) -> dict:
     status: dict[str, str] = {}
     m: dict = {}
     try:
-        m["quote"] = fetch_quote(code); status["实时行情"] = "ok"
+        m["quote"] = fetch_quote(code); status["实时行情"] = f"ok（{m['quote'].get('src', '')}）"
     except Exception as e:  # noqa: BLE001
         status["实时行情"] = f"失败：{e}"; m["quote"] = None
     try:
-        m["prices"] = fetch_prices(code); status["个股行情"] = "ok"
+        m["prices"] = fetch_prices(code); status["个股行情"] = f"ok（{m['prices'].attrs.get('src', '')}）"
     except Exception as e:  # noqa: BLE001
         m["prices"] = None; status["个股行情"] = f"失败：{e}"
     try:
-        ix = fetch_index(); status["沪深300"] = "ok"
+        ix = fetch_index(); status["沪深300"] = f"ok（{ix.attrs.get('src', '')}）"
     except Exception as e:  # noqa: BLE001
         ix = None; status["沪深300"] = f"失败：{e}"
     m["beta"] = None
@@ -342,7 +401,7 @@ def load_market(code: str) -> dict:
         except Exception as e:  # noqa: BLE001
             status["贝塔"] = f"失败：{e}"
     try:
-        m["rf"] = fetch_rf(); status["10年国债"] = "ok"
+        m["rf"] = fetch_rf(); status["10年国债"] = "ok（东方财富）"
     except Exception as e:  # noqa: BLE001
         m["rf"] = None; status["10年国债"] = f"失败：{e}"
     m["status"] = status
@@ -357,7 +416,7 @@ def load_company(code: str) -> dict:
         raise RuntimeError(f"财务报表抓取失败，无法继续：{e}")
     m = load_market(code)
     cd: dict = {"code": code, "quote": m["quote"], "prices": m["prices"], "beta": m["beta"], "rf": m["rf"]}
-    status = {"三张报表": "ok", **m["status"]}
+    status = {"三张报表": "ok（东方财富）", **m["status"]}
 
     cd["annual"] = build_annual(st)
     cd["annual_long"] = build_annual_long(st)

@@ -43,6 +43,7 @@ _MSG = [
     (r"默认清单（Wind 全球可比公司）", "Default list (Wind global comparables)"),
     (r"手动输入", "Manual input"),
     (r"失败：", "Failed: "),
+    (r"东方财富", "Eastmoney"), (r"腾讯", "Tencent"), (r"新浪", "Sina"),
     ("（", " ("), ("）", ")"), ("：", ": "), ("，", ", "),
 ]
 
