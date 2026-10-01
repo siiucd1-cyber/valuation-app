@@ -52,6 +52,9 @@ st.markdown(f"""
   .hdr-px {{font-size: 1.05rem; font-weight: 600; margin-left: 0.6rem;}}
   .hdr-sub {{font-size: 0.9rem; color: {C['note']};}}
   .legend-chip {{display:inline-block; padding:0 0.45rem; border-radius:3px; margin-right:0.6rem; font-size:0.8rem;}}
+  .chk-grid {{display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:0.4rem 0.8rem; margin:0.2rem 0 1rem;}}
+  .chk {{font-size:0.86rem; padding:0.35rem 0.6rem; border:1px solid {C['grid']}; border-radius:4px;}}
+  .chk-d {{display:block; color:{GREY}; font-size:0.78rem; margin-left:1.1rem;}}
   .verdict {{background:{C['box']}; border-left:3px solid {GREY}; padding:0.8rem 1rem; border-radius:4px; line-height:1.9;}}
   h3 {{margin-top: 0.6rem;}}
 </style>
@@ -171,17 +174,18 @@ def defaults_from(cd: dict) -> M.Assumptions:
     capex = float(np.clip(max(fmed("资本开支/营收%"), da), 0, 300))
     nwc = float(np.clip(fmed("营运资本/营收%"), 0, 60))
     mcap = cd["quote"]["mcap_yi"]
+    stub = (4 - it["季度数"]) / 4 if it and it.get("季度数") else 1.0
     return M.Assumptions(
         g_first=round(g1, 1), g_last=round(float(np.clip(g1 * 0.4, 3, 10)), 1),
         m_first=round(m1, 1), m_last=round(m1, 1),
         other_first=round(_fin(other1), 0), other_change=-15.0, other_in_fcf=0.0,
         tax=round(float(np.clip(_fin(L["有效税率%"], 25.0), 0, 30)), 2),
         minority=round(float(np.clip(_fin(L["少数股东占比%"]), 0, 60)), 2),
-        da_pct=round(da, 2), capex_pct=round(capex, 2), nwc_pct=round(nwc, 2),
+        da_pct=round(da, 2), capex_pct=round(capex, 2), nwc_pct=round(nwc, 2), capex_ty=round(da, 2),
         rf=round(cd["rf"], 2) if cd.get("rf") else 1.7,
         beta=round(cd["beta"]["beta"], 2) if cd.get("beta") else 1.2,
         erp=5.5, size_prem=1.0 if mcap < 100 else (0.5 if mcap < 300 else 0.0),
-        kd=3.5, g_term=2.5, add_cash=True, add_fin=True,
+        kd=3.5, g_term=2.5, add_cash=True, add_fin=True, mid_year=True, stub=float(stub),
     )
 
 
@@ -450,8 +454,10 @@ with st.sidebar:
 
     with st.expander(T("资本开支与营运资金")):
         st.slider(T("折旧摊销 / 营收（%）"), 0.0, 20.0, key="a_da_pct", step=0.1)
-        st.slider(T("资本开支 / 营收（%）"), 0.0, cx_hi, key="a_capex_pct", step=0.1,
+        st.slider(T("第1年资本开支 / 营收（%）"), 0.0, cx_hi, key="a_capex_pct", step=0.1,
                   help=T("默认取近三年中位数与折旧率的较大者，即长期至少覆盖折旧"))
+        st.slider(T("第5年及终值年资本开支 / 营收（%）"), 0.0, cx_hi, key="a_capex_ty", step=0.1,
+                  help=T("CAPEX_TY_HELP", da=dflt.da_pct))
         st.slider(T("营运资金增加 / 营收增量（%）"), 0.0, 60.0, key="a_nwc_pct", step=0.5)
         st.slider(T("分红率（%）"), 0.0, 100.0, key="a_payout", step=5.0,
                   help=T("只影响计算表中预测资产负债表的净现金与权益，不影响折现法"))
@@ -470,6 +476,9 @@ with st.sidebar:
         st.number_input(T("永续增长率（%）"), key="a_g_term", step=0.25, format="%.2f")
         st.checkbox(T("货币资金计入净现金"), key="a_add_cash")
         st.checkbox(T("交易性金融资产计入净现金"), key="a_add_fin")
+        st.checkbox(T("年中折现"), key="a_mid_year", help=T("MID_HELP"))
+        st.caption(T("估值基准日 {d}（最新报表日）；第 1 年计入基准日之后 {s:.0%} 的现金流。",
+                     d=bs["报告期"], s=st.session_state.get("a_stub", 1.0)))
 
 
 A = current_assumptions()
@@ -485,6 +494,7 @@ ncd = M.net_cash(bs, A)
 try:
     D = M.dcf(fc, W, A.g_term, ncd["净现金"], shares_wan)
     sens = M.sensitivity(fc, ncd["净现金"], shares_wan, W, A.g_term)
+    sens_m = M.sensitivity_multiples(fc, ncd["净现金"], shares_wan, W, A.g_term)
 except ValueError as e:
     st.error(tr_msg(str(e))); st.stop()
 ttm = M.rolling_ttm(cd["quarterly"])
@@ -499,6 +509,35 @@ if px is not None and len(px):
     last = px[px.index >= px.index[-1] - pd.Timedelta(days=365)]
     hi52, lo52 = float(last.max()), float(last.min())
 iw = M.implied_wacc(fc, A.g_term, ncd["净现金"], shares_wan, q["price"])
+mult = M.implied_multiples(D, fc, an.loc[base_year], base_year, mcap_wan)
+ts = M.three_statements(an, fc, A)
+TY = D["终值年"]
+
+
+def model_checks() -> list[tuple[str, str, str]]:
+    """模型检查面板：(检查项, 状态 ok / warn / fail, 说明)。"""
+    rc_ = M.regression_check(an.loc[base_year])
+    tol = max(1.0, abs(rc_["披露归母"]) * 0.005)
+    gap = abs(float(ts["资产负债表"].loc["平衡检查", ts["预测列"]].abs().max()))
+    out = [
+        (T("预测资产负债表平衡"), "ok" if gap < 0.5 else "fail", T("最大差额 {v} 万元", v=fmt(gap))),
+        (T("历史利润表勾稽（{y}A）", y=base_year), "ok" if abs(rc_["偏差"]) <= tol else "warn",
+         T("模型还原 {m} vs 披露 {d} 万元", m=fmt(rc_["模型归母"]), d=fmt(rc_["披露归母"]))),
+        (T("折现率高于永续增长率 3 个百分点以上"), "ok" if W - A.g_term >= 3 else ("warn" if W > A.g_term else "fail"),
+         T("相差 {d:.2f} 个百分点", d=W - A.g_term)),
+        (T("终值年自由现金流为正"), "ok" if TY["FCFF"] > 0 else "fail", T("{v} 万元", v=fmt(TY["FCFF"]))),
+        (T("终值年资本开支不低于折旧摊销"), "ok" if TY["资本开支"] >= TY["折旧摊销"] * 0.999 else "warn",
+         T("资本开支 {c} vs 折旧摊销 {d} 万元", c=fmt(TY["资本开支"]), d=fmt(TY["折旧摊销"]))),
+        (T("终值占企业价值不超过 85%"), "ok" if D["终值占比%"] <= 85 else "warn", f"{D['终值占比%']:.1f}%"),
+    ]
+    return out
+
+
+CHECKS = model_checks()
+mx = lambda v: f"{v:.1f}x" if v == v else "n.m."     # 倍数显示；分母不为正时无意义
+n_pass = sum(s_ == "ok" for _, s_, _ in CHECKS)
+IS_BASE = not OVR and all(abs(float(getattr(A, k_)) - float(getattr(dflt, k_))) < 1e-9
+                          for k_ in FIELDS if isinstance(getattr(A, k_), (int, float)))
 
 # ─────────────────────────── 页眉
 chg = q.get("chg_pct", 0) or 0
@@ -623,6 +662,17 @@ with tabs[3]:
     st.dataframe(sens_show.fillna(NA).style.format(na_fmt(lambda v: f"{v:.2f}")).apply(
         lambda s: [f"background-color:{C['hi']};font-weight:600" if (s.name == base_r and c_ == base_c)
                    else "" for c_ in s.index], axis=1), width="stretch")
+    sm1, sm2 = st.columns(2)
+    for col_, key_, ttl_ in ((sm1, "终值隐含EV/EBITDA", T("同一网格：终值隐含 EV/EBITDA（倍）")),
+                             (sm2, "隐含市盈率", T("同一网格：{y} 隐含市盈率（倍）", y=fc["年份"].iloc[0]))):
+        with col_:
+            st.markdown("**" + ttl_ + "**")
+            t_ = sens_m[key_].copy()
+            t_.index.name = T("折现率 \\ 永续增长率")
+            st.dataframe(t_.fillna(NA).style.format(na_fmt(lambda v: f"{v:.1f}x")).apply(
+                lambda s: [f"background-color:{C['hi']};font-weight:600" if (s.name == base_r and c_ == base_c)
+                           else "" for c_ in s.index], axis=1), width="stretch")
+    st.markdown(f"<div class='note'>{T('SENS_MULT_NOTE')}</div>", unsafe_allow_html=True)
 
     # ── 5. 参数估计细节
     with st.expander(T("参数估计细节：历史观测与稳健性检查")):
@@ -785,6 +835,23 @@ with tabs[0]:
         st.dataframe(imp_show, hide_index=True, width="stretch")
         st.markdown(f"<div class='note'>{T('BRIDGE_NOTE')}</div>", unsafe_allow_html=True)
 
+    # ── 隐含倍数交叉检验
+    st.markdown("#### " + T("隐含倍数交叉检验"))
+    m1_, m2_ = st.columns([3, 2])
+    with m1_:
+        st.dataframe(pd.DataFrame({T("倍数"): [T(x) if "（" not in x or x.startswith("终值") else
+                                                x.replace("市盈率", T("市盈率")) for x in mult["倍数"]],
+                                   T("折现法隐含"): [mx(v) for v in mult["折现法隐含"]],
+                                   T("按现价"): [mx(v) if v == v else "—" for v in mult["按现价"]]}),
+                     hide_index=True, width="stretch")
+    with m2_:
+        r1_ = mult.iloc[1]
+        st.markdown("<div class='note'>" + T(
+            "MULT_SUMMARY", y=fc["年份"].iloc[0], ev=mx(r1_["折现法隐含"]), evm=mx(r1_["按现价"]),
+            pe=mx(mult.iloc[3]["折现法隐含"]), pem=mx(mult.iloc[3]["按现价"]), tv=mx(D["终值隐含EV/EBITDA"])) +
+            "</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='note'>{T('MULT_NOTE')}</div>", unsafe_allow_html=True)
+
     l2, r2 = st.columns(2)
     with l2:
         bars = []
@@ -828,8 +895,13 @@ with tabs[0]:
         w=W, ke=wc["股权成本"], b=A.beta, g=A.g_term, v=D["每股价值"], tv=D["终值占比%"],
         nc=ncd["净现金"] / shares_wan, ncp=ncd["净现金"] / shares_wan / D["每股价值"],
         px=q["price"], iw=f"{iw:.2f}%" if iw == iw else T("无解（任何折现率都达不到）"), n=sims, src=emp["方法"], p50=ps_pct["P50"], p5=ps_pct["P5"], p95=ps_pct["P95"]))
-    if fc["FCFF"].iloc[-1] < 0:
-        st.warning(T("FCFF_NEG", cx=A.capex_pct, da=A.da_pct))
+    st.markdown(T("- **折现时点**：估值基准日 {d}，{conv}；第 1 年计入基准日之后 {s:.0%} 的现金流。终值按终值年（稳定状态）自由现金流计算。\n"
+                  "- **模型检查**：{k}/{n} 项通过{extra}（详见「计算表」页签顶部）。",
+                  d=bs["报告期"], conv=T("年中折现") if A.mid_year else T("年末折现"), s=A.stub, k=n_pass, n=len(CHECKS),
+                  extra="" if n_pass == len(CHECKS) else T("，未通过：{x}",
+                                                          x="、".join(c_ for c_, s_, _ in CHECKS if s_ != "ok"))))
+    if TY["FCFF"] < 0:
+        st.warning(T("FCFF_NEG", cx=A.capex_ty, da=fc["折旧摊销/营收%"].iloc[-1]))
     if W - A.g_term < 4:
         st.warning(T("折现率 {w:.2f}% 与永续增长率 {g:.2f}% 只差 {d:.2f} 个百分点，终值被大幅放大，折现法结果不可靠。",
                      w=W, g=A.g_term, d=W - A.g_term))
@@ -939,12 +1011,22 @@ def style_stmt(df: pd.DataFrame, hcols: list, fcols: list):
     sty = df.astype(float).fillna(NA).style.apply(css, axis=None)
     for r_ in df.index:
         f_ = (lambda v: f"{v:.2f}%") if r_ in PCT_ROWS else \
-             ((lambda v: f"{v:.4f}") if r_ == "折现因子" else (lambda v: fmt(v)))
+             ((lambda v: f"{v:.4f}") if r_ == "折现因子" else
+              ((lambda v: f"{v:.0%}") if r_ == "计入比例" else
+               ((lambda v: f"{v:.2f}") if r_ == "折现年数" else (lambda v: fmt(v)))))
         sty = sty.format(na_fmt(f_), subset=pd.IndexSlice[[r_], :])
     return sty.format_index(lambda x: T(x), axis=0)
 
 
 with tabs[1]:
+    st.markdown("#### " + T("模型检查") + f"　<span class='hdr-sub'>{T('{k}/{n} 项通过', k=n_pass, n=len(CHECKS))}"
+                + "　·　" + (T("基准情形（数据默认假设）") if IS_BASE else T("已调整假设")) + "</span>",
+                unsafe_allow_html=True)
+    ICON = {"ok": ("✓", "#2E8B57"), "warn": ("!", "#C98A00"), "fail": ("✗", "#C0392B")}
+    chk_html = "".join(
+        f"<div class='chk'><span style='color:{ICON[s_][1]};font-weight:700'>{ICON[s_][0]}</span> "
+        f"<b>{lab_}</b><span class='chk-d'>{det_}</span></div>" for lab_, s_, det_ in CHECKS)
+    st.markdown(f"<div class='chk-grid'>{chk_html}</div>", unsafe_allow_html=True)
     st.markdown(
         f"<span class='legend-chip' style='color:{C['inp']};font-weight:600;border:1px solid {C['grid']}'>"
         f"{T('蓝字 = 可直接修改')}</span>"
@@ -1003,7 +1085,6 @@ with tabs[1]:
     st.markdown("#### " + T("三张表（万元）"))
     st.markdown(f"<div class='note'>{T('STMT_EDIT_NOTE_PDF' if mode == 'pdf' else 'STMT_EDIT_NOTE')}</div>",
                 unsafe_allow_html=True)
-    ts = M.three_statements(an, fc, A)
     pdf_ = mode == "pdf"
     META = {
         "利润表": {"营业总收入": {"bold": True, "hedit": "营业总收入" if pdf_ else ""},
@@ -1051,9 +1132,12 @@ with tabs[1]:
     # ── 4. 自由现金流与折现
     st.markdown("#### " + T("自由现金流与折现（万元）"))
     fcf_t = fc.set_index("年份")[["NOPAT", "折旧摊销", "资本开支", "营运资金增加", "FCFF"]].T
+    fcf_t.loc["计入比例"] = D["计入比例"]
+    fcf_t.loc["折现年数"] = D["折现年数"]
     fcf_t.loc["折现因子"] = D["折现因子"]
     fcf_t.loc["现值"] = D["现值"]
-    fcf_t[T("终值")] = [np.nan, np.nan, np.nan, np.nan, D["终值"], D["折现因子"][-1], D["终值现值"]]
+    fcf_t[T("终值年")] = [TY["NOPAT"], TY["折旧摊销"], TY["资本开支"], TY["营运资金增加"], TY["FCFF"],
+                        np.nan, np.nan, np.nan, np.nan]
     st.dataframe(style_stmt(fcf_t.astype(float), [], []), width="stretch", height=36 * (len(fcf_t) + 1) + 3)
     st.markdown(f"<div class='note'>{T('FCFF_NOTE')}</div>", unsafe_allow_html=True)
     l, r = st.columns([1, 1])
@@ -1072,13 +1156,13 @@ with tabs[1]:
         st.markdown("**" + T("估值桥") + "**")
         st.markdown("<div class='formula'>" + T(
             "预测期现值合计　{pv}<br>"
-            "终值 = {f} × (1 + {g:.2f}%) ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>"
+            "终值 = 终值年 FCFF {f} ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>"
             "终值现值 = {tv} × {df:.4f} = {tpv}<br>"
             "企业价值 = {ev}　（终值占比 {tvp:.1f}%）<br>"
             "＋ 货币资金 {cash}　＋ 交易性金融资产 {fin}　− 有息负债 {debt}<br>"
             "股权价值 = {eq}　÷ 总股本 {sh} 万股<br>"
             "<b>每股价值 = {ps:.2f} 元</b>",
-            pv=fmt(D["预测期现值合计"]), f=fmt(fc["FCFF"].iloc[-1]), g=A.g_term, w=W, tv=fmt(D["终值"]),
+            pv=fmt(D["预测期现值合计"]), f=fmt(TY["FCFF"]), g=A.g_term, w=W, tv=fmt(D["终值"]),
             df=D["折现因子"][-1], tpv=fmt(D["终值现值"]), ev=fmt(D["企业价值"]), tvp=D["终值占比%"],
             cash=fmt(ncd["货币资金"]), fin=fmt(ncd["交易性金融资产"]), debt=fmt(ncd["有息负债"]),
             eq=fmt(D["股权价值"]), sh=fmt(shares_wan), ps=D["每股价值"]) + "</div>", unsafe_allow_html=True)
@@ -1100,7 +1184,9 @@ with tabs[1]:
               T("VERDICT_2", tv=D["终值占比%"], nc=ncd["净现金"] / shares_wan,
                 ncp=ncd["净现金"] / shares_wan / D["每股价值"] if D["每股价值"] else float("nan")),
               T("VERDICT_3", f=T(t0["因素"]), r=t0["变动幅度"], lo=t0["低"], hi=t0["高"]),
-              (T("VERDICT_4", iw=iw, w=W) if iw == iw else T("VERDICT_4N"))]
+              (T("VERDICT_4", iw=iw, w=W) if iw == iw else T("VERDICT_4N")),
+              T("VERDICT_5", y=fc["年份"].iloc[0], pe=mx(mult.iloc[3]["折现法隐含"]), pem=mx(mult.iloc[3]["按现价"]),
+                tv=mx(D["终值隐含EV/EBITDA"]))]
     if n_ovr:
         lines_.append(T("其中 {n} 个逐年假设为手动修改（见上方黄底单元格）。", n=n_ovr))
     st.markdown("<div class='verdict'>" + "<br>".join("· " + x for x in lines_) + "</div>", unsafe_allow_html=True)

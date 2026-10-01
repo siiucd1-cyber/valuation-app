@@ -70,6 +70,7 @@ def tr_msg(s: str) -> str:
 
 
 ZH = {
+    "STUB_NOTE": "估值基准日 {d}（最新报表日）：第 1 个预测年只计入基准日之后的部分（年报为 1，半年报为 0.5）",
     "NO_REVENUE": "{y} 年营业收入为 0：本工具的折现法以营收增速和利润率驱动，不适用于尚未产生收入的公司（如未商业化的创新药企），"
                   "这类公司通常按研发管线里程碑或最近一轮融资估值。",
     "STMT_EDIT_NOTE": ("点击蓝色格子即可直接修改（营收增速、核心经营利润率、投资收益及其他、资本开支 / 营收、折旧摊销 / 营收），"
@@ -97,9 +98,22 @@ ZH = {
                   "判断现价是否合理，关键在于这一隐含回报要求、以及上方「现价隐含了什么」所列的增长和利润率条件是否站得住。"),
     "VERDICT_4N": "在当前经营假设下，任何高于永续增长率的折现率都无法使折现法达到现价。",
     "VERDICT_NOTE": "结论完全由上方假设推出，改动任一假设都会即时更新；仅供学习研究，不构成投资建议。",
-    "FCFF_NEG": ("预测期最后一年的自由现金流为负，终值也随之为负，折现法结果没有意义。常见原因是公司处于扩张期："
-                 "资本开支 / 营收（当前 {cx:.1f}%）远高于折旧摊销 / 营收（{da:.1f}%），而模型把这个比例延续到了永续期。"
-                 "可在左侧「资本开支与营运资金」中把资本开支调到接近折旧的维持性水平后再看。"),
+    "FCFF_NEG": ("终值年自由现金流为负，终值也随之为负，折现法结果没有意义。终值年代表公司进入稳定状态，"
+                 "资本开支一般回落到维持性水平：当前终值年资本开支 / 营收为 {cx:.1f}%，折旧摊销 / 营收为 {da:.1f}%。"
+                 "可在左侧「资本开支与营运资金」中调低「第5年及终值年资本开支 / 营收」；若终值年利润为负，则需要先调整利润率假设。"),
+    "CAPEX_TY_HELP": ("扩张期的资本开支不会永远持续，稳定状态下一般回落到维持性水平，约等于折旧摊销。"
+                      "预测期资本开支 / 营收从第 1 年的取值线性过渡到这里的取值，第 5 年与终值年按此计算。"
+                      "默认取折旧摊销 / 营收（{da}%）；若永续增长仍需较多投入，可略高于折旧。"),
+    "MID_HELP": ("年中折现：假设现金流在一年中均匀流入，按各期中点折现，是估值报告的通行做法；不勾选则按期末折现，结果偏保守。"
+                 "终值同样按最后一个预测年的中点折现。"),
+    "SENS_MULT_NOTE": ("同一组折现率与永续增长率下，终值和股权价值换算成的倍数。终值隐含 EV/EBITDA 明显高于同行交易倍数时，"
+                       "说明永续假设偏乐观；隐含市盈率可与公司历史区间、同行倍数对照。"),
+    "MULT_SUMMARY": ("按折现法，{y} EV/EBITDA 为 {ev}、市盈率为 {pe}；按现价分别为 {evm} 和 {pem}。"
+                     "终值相当于终值年 EBITDA 的 {tv}。"),
+    "MULT_NOTE": ("交叉检验：把折现法结果换算成倍数，看是否落在合理范围内。EBITDA = 核心经营利润 + 折旧摊销；"
+                  "市场企业价值 = 总市值 − 净现金（与折现法同口径）。分母为负时显示 n.m.。"
+                  "终值隐含倍数若远高于同行，说明永续增长或终值年利润假设偏乐观。"),
+    "VERDICT_5": "交叉检验：折现法对应 {y} 市盈率 {pe}（现价对应 {pem}），终值相当于终值年 EBITDA 的 {tv}。",
     "MODE_HELP": ("实时数据：输入股票代码，从东方财富、腾讯、新浪公开接口拉取；演示数据：预存快照，无网络也能打开；"
                   "上传年报 PDF：从年报中自动抽取合并报表，适合接口取不到数据或想用原始披露数据时。"),
     "PDF_UP_HELP": "上传同一家公司的 1–6 份年度报告（沪深交易所标准格式）。多份年报可拼成更长的历史序列。",
@@ -152,7 +166,9 @@ ZH = {
                     "经营性ROE = 扣非归母净利润 ÷（平均归母权益 − 平均货币资金与交易性金融资产），"
                     "用于剔除闲置资金对回报率的稀释。"),
     "FCFF_NOTE": ("NOPAT =（核心经营利润 + 投资收益及其他 × 计入比例）×（1 − 税率）；"
-                  "FCFF = NOPAT + 折旧摊销 − 资本开支 − 营运资金增加；年末折现。"),
+                  "FCFF = NOPAT + 折旧摊销 − 资本开支 − 营运资金增加。第 1 年只计入估值基准日之后的部分；"
+                  "默认年中折现。资本开支 / 营收从第 1 年线性过渡到第 5 年的稳定水平；终值年 = 第 5 年按永续增长率外推一年，"
+                  "营运资金按永续增速计算。"),
     "IW_HELP": ("反向折现：其他假设不变，求使折现法每股价值恰好等于现价的折现率。"
                 "它比模型折现率低得越多，说明市场定价隐含的风险越低或长期增长越高。"),
     "TEMPLATE_NOTE": ("不依赖网页的折现法模板：「历史数据」表放 5 年报表科目，历史指标和参考假设自动算出；"
@@ -164,10 +180,39 @@ ZH = {
         "**投资收益及其他** = 利润总额 − 核心经营利润。\n"
         "- **贝塔**：最近 100 周个股与沪深300 周收益率回归。\n"
         "- **蒙特卡洛**：均值取用户假设；标准差与相关系数可选单季滚动 TTM、年度同比或手动输入。\n"
+        "- **折现时点**：估值基准日取最新报表日（与净现金同一时点），第 1 年只计入基准日之后的现金流；默认年中折现。\n"
+        "- **资本开支与终值**：资本开支 / 营收从第 1 年线性过渡到稳定水平（第 5 年，默认等于折旧摊销）；"
+        "终值年 = 第 5 年按永续增长率外推一年，营运资金按永续增速计算；终值 = 终值年 FCFF ÷（WACC − g）。\n"
+        "- **交叉检验**：折现法结果换算成 EV/EBITDA 与市盈率，与现价对应的倍数并列；计算表顶部列出模型检查结果。\n"
         "- 本工具为个人学习项目，所有结论基于用户假设，不构成投资建议。"),
 }
 
 EN = {
+    "营收增速、利润率、投资收益、折旧摊销与资本开支为逐年假设，见「预测与折现法」表蓝色行":
+        "Revenue growth, margins, investment income, D&A and capex are yearly assumptions: see the blue rows on the Forecast & DCF sheet",
+    "STUB_NOTE": "Valuation date {d} (latest balance sheet): year 1 counts only the part after it (1 for an annual report, 0.5 for interims)",
+    "EBITDA = 核心经营利润 + 折旧摊销；按现价的企业价值 = 总市值 − 净现金":
+        "EBITDA = core operating profit + D&A; EV at the current price = market cap − net cash",
+    "通过": "Pass", "需关注": "Review", "未通过": "Fail", "全部通过": "All passed", "项通过": "passed",
+    "检查项": "Check", "结果": "Result", "模型检查汇总": "Checks summary",
+    "差距过小时终值被大幅放大": "A small gap inflates the terminal value",
+    "为负时终值没有意义": "A negative terminal-year FCFF makes the terminal value meaningless",
+    "稳定状态下资本开支至少维持现有资产": "In steady state capex should at least maintain the asset base",
+    "过高说明估值主要依赖永续假设": "A high share means the value rests mainly on the perpetuity assumption",
+    "年中折现（1=是，0=否）": "Mid-year convention (1 = yes, 0 = no)", "第 1 年计入比例": "Share of year 1 counted",
+    "现金流按各期中点折现": "Cash flows discounted from the middle of each period",
+    "稳定状态的维持性资本开支，默认等于折旧摊销 / 营收": "Steady-state maintenance capex; defaults to D&A / revenue",
+    "终值隐含 EV/EBITDA（倍）": "Terminal-value EV/EBITDA (x)", "隐含市盈率（{y}，倍）": "Implied {y} P/E (x)",
+    "终值（终值年 FCFF ÷ (WACC − g)）": "Terminal value (terminal-year FCFF ÷ (WACC − g))",
+    "折现时点": "Timing", "交叉检验": "Cross-checks",
+    "估值基准日取最新报表日（与净现金同一时点），第 1 年只计入基准日之后的部分；默认年中折现。":
+        "The valuation date is the latest balance-sheet date (same as net cash); year 1 counts only the part after it; mid-year convention by default.",
+    "「终值年」= 最后一个预测年按永续增长率外推一年，资本开支回落到终值年假设，营运资金按永续增速计算；终值 = 终值年 FCFF ÷ (WACC − g)。":
+        "The terminal year extends the final forecast year by one year at terminal growth, with capex falling back to the terminal-year assumption and working capital at terminal growth; TV = terminal-year FCFF ÷ (WACC − g).",
+    "「预测与折现法」表下方：折现法隐含的 EV/EBITDA、市盈率与现价倍数并列，以及模型检查结果。":
+        "Below the Forecast & DCF table: the EV/EBITDA and P/E implied by the DCF next to the multiples at the current price, and the model checks.",
+    "假设 → 预测与折现法（含隐含倍数与模型检查）→ 敏感性；历史数据与蒙特卡洛结果为数值。":
+        "Assumptions → Forecast & DCF (with implied multiples and model checks) → Sensitivity; history and Monte Carlo results are values.",
     # ── 页面与侧边栏
     "估值工作台": "Valuation Workbench",
     "输入 A 股代码，自动拉取财报；左侧所有假设可调，结果即时重算。":
@@ -379,8 +424,8 @@ EN = {
     "Kd × (1 − 税率)": "Kd × (1 − tax rate)",
     "有息负债 ÷（有息负债 + 市值）": "Debt ÷ (debt + market cap)",
     "估值桥": "Valuation bridge",
-    "预测期现值合计　{pv}<br>终值 = {f} × (1 + {g:.2f}%) ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>终值现值 = {tv} × {df:.4f} = {tpv}<br>企业价值 = {ev}　（终值占比 {tvp:.1f}%）<br>＋ 货币资金 {cash}　＋ 交易性金融资产 {fin}　− 有息负债 {debt}<br>股权价值 = {eq}　÷ 总股本 {sh} 万股<br><b>每股价值 = {ps:.2f} 元</b>":
-        "PV of forecast FCFF  {pv}<br>Terminal value = {f} × (1 + {g:.2f}%) ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>PV of terminal value = {tv} × {df:.4f} = {tpv}<br>Enterprise value = {ev}  (terminal share {tvp:.1f}%)<br>+ cash {cash}  + trading financial assets {fin}  − debt {debt}<br>Equity value = {eq}  ÷ shares {sh} (10k)<br><b>Value per share = RMB {ps:.2f}</b>",
+    "预测期现值合计　{pv}<br>终值 = 终值年 FCFF {f} ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>终值现值 = {tv} × {df:.4f} = {tpv}<br>企业价值 = {ev}　（终值占比 {tvp:.1f}%）<br>＋ 货币资金 {cash}　＋ 交易性金融资产 {fin}　− 有息负债 {debt}<br>股权价值 = {eq}　÷ 总股本 {sh} 万股<br><b>每股价值 = {ps:.2f} 元</b>":
+        "PV of forecast FCFF  {pv}<br>Terminal value = terminal-year FCFF {f} ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>PV of terminal value = {tv} × {df:.4f} = {tpv}<br>Enterprise value = {ev}  (terminal share {tvp:.1f}%)<br>+ cash {cash}  + trading financial assets {fin}  − debt {debt}<br>Equity value = {eq}  ÷ shares {sh} (10k)<br><b>Value per share = RMB {ps:.2f}</b>",
     "金额单位：万元；净现金取 {d} 资产负债表": "Amounts in RMB 10k; net cash from the {d} balance sheet",
     "盈利预测与自由现金流（万元）": "Forecast and free cash flow (RMB 10k)",
     "NOPAT": "NOPAT", "FCFF": "FCFF",
@@ -388,7 +433,10 @@ EN = {
     "折现因子": "Discount factor",
     "现值": "Present value",
     "FCFF_NOTE": ("NOPAT = (core operating profit + investment income & other × share counted) × (1 − tax); "
-                  "FCFF = NOPAT + D&A − capex − increase in working capital; year-end discounting."),
+                  "FCFF = NOPAT + D&A − capex − increase in working capital. Year 1 counts only the part after the valuation "
+                  "date; mid-year convention by default. Capex / revenue moves linearly from year 1 to a steady-state level "
+                  "by year 5; the terminal year extends year 5 by one year at terminal growth, with working capital at "
+                  "terminal growth."),
     "敏感性：每股价值（元）": "Sensitivity: value per share (RMB)",
 
     # ── 市盈率法
@@ -517,6 +565,13 @@ EN = {
         "- **Beta**: regression of the last 100 weekly returns against the CSI 300.\n"
         "- **Monte Carlo**: means follow your assumptions; standard deviations and correlation come from rolling TTM, "
         "annual YoY or manual input.\n"
+        "- **Timing**: the valuation date is the latest balance-sheet date (the same date as net cash); year 1 counts only "
+        "cash flow after it; mid-year convention by default.\n"
+        "- **Capex and terminal value**: capex / revenue moves linearly from year 1 to a steady-state level by year 5 (D&A by "
+        "default); the terminal year extends year 5 by one year at terminal growth, with working capital at terminal growth; "
+        "TV = terminal-year FCFF ÷ (WACC − g).\n"
+        "- **Cross-checks**: the DCF result is expressed as EV/EBITDA and P/E next to the multiples at the current price; "
+        "model checks are listed at the top of the Model tab.\n"
         "- A personal study project. All conclusions depend on user assumptions and are not investment advice."),
 
     # ── 敏感性分析（新增）
@@ -633,10 +688,57 @@ EN = {
     "一年内到期非流动负债": "Non-current liabilities due within one year", "应收账款": "Accounts receivable",
     "存货": "Inventory", "应付账款": "Accounts payable", "营业收入": "Operating revenue", "营业成本": "Cost of sales",
     "所得税": "Income tax", "净利润": "Net profit",
-    "FCFF_NEG": ("Free cash flow in the final forecast year is negative, so the terminal value is negative too and the DCF is "
-                 "not meaningful. A common cause is an expansion phase: capex / revenue ({cx:.1f}%) is far above D&A / "
-                 "revenue ({da:.1f}%), and the model carries that ratio into perpetuity. Lower capex towards a maintenance "
-                 "level close to D&A under “Capex & working capital” on the left."),
+    "FCFF_NEG": ("Terminal-year free cash flow is negative, so the terminal value is negative too and the DCF is not "
+                 "meaningful. The terminal year represents a steady state in which capex normally falls back to a "
+                 "maintenance level: terminal capex / revenue is {cx:.1f}% and D&A / revenue is {da:.1f}%. Lower "
+                 "“Year-5 & terminal capex / revenue” under “Capex & working capital” on the left; if terminal-year profit is "
+                 "negative, revisit the margin assumptions first."),
+    "CAPEX_TY_HELP": ("Expansion capex does not last forever; in steady state it usually falls back to a maintenance level close "
+                      "to D&A. Capex / revenue moves linearly from the year-1 value to this value, which applies to year 5 and the "
+                      "terminal year. Defaults to D&A / revenue ({da}%); set it a little higher if perpetual growth still needs "
+                      "investment."),
+    "MID_HELP": ("Mid-year convention: cash flows arrive evenly through the year and are discounted from the middle of each "
+                 "period, the standard in valuation reports. Unticked, cash flows are discounted at period end (more "
+                 "conservative). The terminal value is discounted from the middle of the final forecast year as well."),
+    "SENS_MULT_NOTE": ("The same grid of discount rates and terminal growth, expressed as multiples. A terminal EV/EBITDA well above "
+                       "peer trading multiples signals an optimistic perpetuity assumption; the implied P/E can be compared with "
+                       "the company's own history and peers."),
+    "MULT_SUMMARY": ("On the DCF, {y} EV/EBITDA is {ev} and P/E is {pe}; at the current price they are {evm} and {pem}. "
+                     "The terminal value is {tv} terminal-year EBITDA."),
+    "MULT_NOTE": ("Cross-check: convert the DCF result into multiples and see whether they are in a sensible range. EBITDA = "
+                  "core operating profit + D&A; market EV = market cap − net cash (same basis as the DCF). n.m. when the "
+                  "denominator is negative. A terminal multiple far above peers means perpetual growth or terminal-year "
+                  "profit is too optimistic."),
+    "VERDICT_5": "Cross-check: the DCF implies a {y} P/E of {pe} (current price: {pem}); the terminal value is {tv} terminal-year EBITDA.",
+    "第5年及终值年资本开支 / 营收（%）": "Year-5 & terminal capex / revenue (%)",
+    "第1年资本开支 / 营收（%）": "Year-1 capex / revenue (%)",
+    "稳定状态的维持性资本开支，默认等于折旧摊销 / 营收；预测期从第 1 年线性过渡到此值":
+        "Steady-state maintenance capex, D&A / revenue by default; the forecast moves linearly from year 1 to this value",
+    "资本开支 / 营收从第 1 年线性过渡到稳定水平（第 5 年）；「终值年」= 第 5 年按永续增长率外推一年，营运资金按永续增速计算；终值 = 终值年 FCFF ÷ (WACC − g)。":
+        "Capex / revenue moves linearly from year 1 to a steady-state level by year 5; the terminal year extends year 5 by one year at terminal growth, with working capital at terminal growth; TV = terminal-year FCFF ÷ (WACC − g).",
+    "年中折现": "Mid-year convention", "年末折现": "year-end discounting",
+    "估值基准日 {d}（最新报表日）；第 1 年计入基准日之后 {s:.0%} 的现金流。":
+        "Valuation date {d} (latest balance sheet); year 1 counts the {s:.0%} of cash flow after that date.",
+    "模型检查": "Model checks", "{k}/{n} 项通过": "{k}/{n} passed",
+    "基准情形（数据默认假设）": "Base case (data-driven defaults)", "已调整假设": "Assumptions adjusted",
+    "预测资产负债表平衡": "Forecast balance sheet balances", "最大差额 {v} 万元": "Largest gap RMB {v} (10k)",
+    "历史利润表勾稽（{y}A）": "Income statement reconciles ({y}A)",
+    "模型还原 {m} vs 披露 {d} 万元": "Model {m} vs reported {d} (RMB 10k)",
+    "折现率高于永续增长率 3 个百分点以上": "WACC at least 3 pp above terminal growth",
+    "相差 {d:.2f} 个百分点": "Gap {d:.2f} pp", "终值年自由现金流为正": "Terminal-year FCFF positive",
+    "{v} 万元": "RMB {v} (10k)", "终值年资本开支不低于折旧摊销": "Terminal-year capex ≥ D&A",
+    "资本开支 {c} vs 折旧摊销 {d} 万元": "Capex {c} vs D&A {d} (RMB 10k)",
+    "终值占企业价值不超过 85%": "Terminal value ≤ 85% of EV",
+    "同一网格：终值隐含 EV/EBITDA（倍）": "Same grid: terminal-value EV/EBITDA (x)",
+    "同一网格：{y} 隐含市盈率（倍）": "Same grid: implied {y} P/E (x)",
+    "隐含倍数交叉检验": "Implied multiples cross-check", "倍数": "Multiple", "折现法隐含": "Implied by DCF",
+    "按现价": "At current price", "市盈率": "P/E", "终值隐含 EV/EBITDA（终值年）": "Terminal value EV/EBITDA (terminal year)",
+    "- **折现时点**：估值基准日 {d}，{conv}；第 1 年计入基准日之后 {s:.0%} 的现金流。终值按终值年（稳定状态）自由现金流计算。\n"
+    "- **模型检查**：{k}/{n} 项通过{extra}（详见「计算表」页签顶部）。":
+        "- **Timing**: valuation date {d}, {conv}; year 1 counts the {s:.0%} of cash flow after that date. The terminal "
+        "value uses steady-state terminal-year free cash flow.\n- **Model checks**: {k}/{n} passed{extra} (see the top of the Model tab).",
+    "，未通过：{x}": "; not passed: {x}",
+    "计入比例": "Share counted", "终值年": "Terminal year",
     # ── 计算表
     "蓝字 = 可直接修改": "Blue = editable",
     "STMT_EDIT_NOTE": ("Click a blue cell to edit it (revenue growth, core margin, investment income & other, capex / revenue, "

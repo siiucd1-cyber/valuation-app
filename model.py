@@ -31,6 +31,7 @@ class Assumptions:
     da_pct: float = 2.5            # 折旧摊销 / 营收 %
     capex_pct: float = 3.0         # 资本开支 / 营收 %
     nwc_pct: float = 10.0          # 营运资金增加 / 营收增量 %
+    capex_ty: float = 2.5          # 第 5 年及终值年资本开支 / 营收 %（稳定状态，默认 = 折旧摊销 / 营收，即维持性资本开支）
     # 折现率
     rf: float = 1.7
     beta: float = 1.2
@@ -43,6 +44,9 @@ class Assumptions:
     add_fin: bool = True
     # 分红率：只用于预测资产负债表（净现金、权益的滚动），不影响折现法
     payout: float = 30.0
+    # 折现时点：估值基准日 = 最新报表日；stub = 第 1 个预测年在基准日之后的比例（年报为 1，半年报为 0.5）
+    mid_year: bool = True          # 年中折现：现金流视为在各期中点流入
+    stub: float = 1.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -69,7 +73,7 @@ def drivers(a: Assumptions, over: dict | None = None) -> dict:
          "m": np.linspace(a.m_first, a.m_last, n),
          "other": a.other_first * (1 + a.other_change / 100) ** np.arange(n),
          "da": np.full(n, float(a.da_pct)),
-         "capex": np.full(n, float(a.capex_pct))}
+         "capex": np.linspace(a.capex_pct, a.capex_ty, n)}      # 从第 1 年线性过渡到稳定状态（第 5 年 = 终值年）
     for k, cells in (over or {}).items():
         if k in d:
             for i, v in cells.items():
@@ -93,13 +97,45 @@ def forecast(rev0: float, base_year: int, a: Assumptions, drv: dict | None = Non
     capex = rev * drv["capex"] / 100
     dnwc = (rev - prev) * a.nwc_pct / 100
     fcff = nopat + da - capex - dnwc
-    return pd.DataFrame({
+    out = pd.DataFrame({
         "年份": [f"{base_year + i + 1}E" for i in range(n)],
         "营收增速%": g, "营业总收入": rev, "核心经营利润率%": m, "核心经营利润": core,
         "投资收益及其他": other, "利润总额": pbt, "所得税": tax, "净利润": pbt - tax,
         "归母净利润": parent, "NOPAT": nopat, "折旧摊销/营收%": drv["da"], "折旧摊销": da,
         "资本开支/营收%": drv["capex"], "资本开支": capex, "营运资金增加": dnwc, "FCFF": fcff,
     })
+    # 终值年与折现时点所需参数随预测表一起传递，dcf / 敏感性 / 反推都从这里读取，保证口径一致
+    out.attrs["params"] = {"capex_ty": float(a.capex_ty), "nwc_pct": float(a.nwc_pct),
+                           "mid_year": bool(a.mid_year), "stub": float(np.clip(a.stub, 0.0, 1.0))}
+    return out
+
+
+def periods(n: int, stub: float = 1.0, mid_year: bool = True) -> tuple[np.ndarray, np.ndarray]:
+    """各预测年的折现年数与计入比例。
+    基准日到第 1 年末为 stub 年，之后每年 1 年：期末 t_k = stub + k − 1；
+    年中折现取各期中点（第 1 年 stub / 2，之后 t_k − 0.5）。第 1 年只计入基准日之后的 stub 部分现金流。"""
+    end = stub + np.arange(n, dtype=float)
+    t = end - np.where(np.arange(n) == 0, stub / 2, 0.5) if mid_year else end
+    frac = np.ones(n)
+    frac[0] = stub
+    return t, frac
+
+
+def terminal_year(fc: pd.DataFrame, g_term: float) -> dict:
+    """终值年（稳定状态）：营收、利润、折旧按永续增长率在最后一个预测年基础上增长一年；
+    资本开支取终值年假设（默认等于折旧摊销，即维持性资本开支）；营运资金增加按永续增速计算。"""
+    p = fc.attrs.get("params", {})
+    L = fc.iloc[-1]
+    gf = 1 + g_term / 100
+    rev = L["营业总收入"] * gf
+    core = rev * L["核心经营利润率%"] / 100
+    da = rev * L["折旧摊销/营收%"] / 100
+    capex = rev * p.get("capex_ty", L["资本开支/营收%"]) / 100
+    dnwc = (rev - L["营业总收入"]) * p.get("nwc_pct", 0.0) / 100
+    nopat = L["NOPAT"] * gf
+    return {"营业总收入": rev, "核心经营利润": core, "NOPAT": nopat, "折旧摊销": da, "资本开支": capex,
+            "营运资金增加": dnwc, "FCFF": nopat + da - capex - dnwc, "EBITDA": core + da,
+            "归母净利润": L["归母净利润"] * gf}
 
 
 def net_cash(bs: dict, a: Assumptions) -> dict:
@@ -110,19 +146,48 @@ def net_cash(bs: dict, a: Assumptions) -> dict:
 
 
 def dcf(fc: pd.DataFrame, w: float, g_term: float, nc: float, shares_wan: float) -> dict:
+    """FCFF 折现。终值 = 终值年 FCFF ÷ (WACC − g)，按最后一个预测年的折现因子折回
+    （年中折现时终值同样按中点折现：Gordon 公式假设终值年现金流在期末，实际在年中流入，两者相差半年）。"""
     if w <= g_term:
         raise ValueError("折现率必须高于永续增长率")
-    t = np.arange(1, len(fc) + 1)
+    p = fc.attrs.get("params", {})
+    t, frac = periods(len(fc), p.get("stub", 1.0), p.get("mid_year", False))
     disc = 1 / (1 + w / 100) ** t
     f = fc["FCFF"].values
-    pv = f * disc
-    tv = f[-1] * (1 + g_term / 100) / (w / 100 - g_term / 100)
+    pv = f * frac * disc
+    ty = terminal_year(fc, g_term)
+    tv = ty["FCFF"] / (w / 100 - g_term / 100)
     tv_pv = tv * disc[-1]
     ev = pv.sum() + tv_pv
     eq = ev + nc
-    return {"折现因子": disc, "现值": pv, "预测期现值合计": pv.sum(), "终值": tv,
-            "终值现值": tv_pv, "企业价值": ev, "净现金": nc, "股权价值": eq,
-            "每股价值": eq / shares_wan, "终值占比%": tv_pv / ev * 100 if ev else np.nan}
+    return {"折现年数": t, "计入比例": frac, "折现因子": disc, "现值": pv, "预测期现值合计": pv.sum(),
+            "终值年": ty, "终值": tv, "终值现值": tv_pv, "企业价值": ev, "净现金": nc, "股权价值": eq,
+            "每股价值": eq / shares_wan, "终值占比%": tv_pv / ev * 100 if ev else np.nan,
+            "终值隐含EV/EBITDA": tv / ty["EBITDA"] if ty["EBITDA"] > 0 else np.nan}
+
+
+def _ratio(a: float, b: float) -> float:
+    """倍数：分子或分母不为正时没有意义，返回 nan。"""
+    return a / b if (a > 0 and b > 0) else float("nan")
+
+
+def implied_multiples(D: dict, fc: pd.DataFrame, base: pd.Series, base_year: int,
+                      mcap_wan: float) -> pd.DataFrame:
+    """隐含倍数交叉检验：折现法得出的企业价值 / 股权价值，换算成 EV/EBITDA 与市盈率，与现价对应的倍数并列。
+    EBITDA = 核心经营利润 + 折旧摊销；市场企业价值 = 总市值 − 净现金（与折现法的净现金口径一致）。"""
+    ev, eq, nc = D["企业价值"], D["股权价值"], D["净现金"]
+    mev = mcap_wan - nc
+    e0 = float(base["核心经营利润"] + base["折旧摊销"])
+    F = fc.iloc[0]
+    e1 = float(F["核心经营利润"] + F["折旧摊销"])
+    n0, n1 = float(base["归母净利润"]), float(F["归母净利润"])
+    y0, y1 = f"{base_year}A", fc["年份"].iloc[0]
+    rows = [(f"EV/EBITDA（{y0}）", _ratio(ev, e0), _ratio(mev, e0)),
+            (f"EV/EBITDA（{y1}）", _ratio(ev, e1), _ratio(mev, e1)),
+            (f"市盈率（{y0}）", _ratio(eq, n0), _ratio(mcap_wan, n0)),
+            (f"市盈率（{y1}）", _ratio(eq, n1), _ratio(mcap_wan, n1)),
+            ("终值隐含 EV/EBITDA（终值年）", D["终值隐含EV/EBITDA"], float("nan"))]
+    return pd.DataFrame(rows, columns=["倍数", "折现法隐含", "按现价"])
 
 
 def sensitivity(fc: pd.DataFrame, nc: float, shares_wan: float, w0: float, g0: float,
@@ -137,6 +202,27 @@ def sensitivity(fc: pd.DataFrame, nc: float, shares_wan: float, w0: float, g0: f
                 dcf(fc, w, g, nc, shares_wan)["每股价值"] if w > g else np.nan)
     out.index.name = "折现率 \\ 永续增长率"
     return out
+
+
+def sensitivity_multiples(fc: pd.DataFrame, nc: float, shares_wan: float, w0: float, g0: float,
+                          dw: float = 1.0, dg: float = 0.5, k: int = 2) -> dict:
+    """与 sensitivity 同一网格：终值隐含 EV/EBITDA、第 1 个预测年的隐含市盈率。"""
+    ws = [w0 + dw * i for i in range(-k, k + 1)]
+    gs = [g0 + dg * j for j in range(-k, k + 1)]
+    idx, cols = [f"{w:.2f}%" for w in ws], [f"{g:.1f}%" for g in gs]
+    tvm = pd.DataFrame(index=idx, columns=cols, dtype=float)
+    pe = pd.DataFrame(index=idx, columns=cols, dtype=float)
+    n1 = float(fc["归母净利润"].iloc[0])
+    for w, i_ in zip(ws, idx):
+        for g, c_ in zip(gs, cols):
+            if w <= g:
+                continue
+            D = dcf(fc, w, g, nc, shares_wan)
+            tvm.loc[i_, c_] = D["终值隐含EV/EBITDA"]
+            pe.loc[i_, c_] = _ratio(D["股权价值"], n1)
+    for t in (tvm, pe):
+        t.index.name = "折现率 \\ 永续增长率"
+    return {"终值隐含EV/EBITDA": tvm, "隐含市盈率": pe}
 
 
 # ─────────────────────────── 反推：现价隐含的折现率
@@ -255,9 +341,14 @@ def monte_carlo(rev0: float, a: Assumptions, w: float, nc: float, shares_wan: fl
     ww = np.maximum(w + sig_w * rng.standard_normal(n), 2.0) if sig_w > 0 else np.full(n, w)
     gt = a.g_term + sig_gt * rng.standard_normal(n) if sig_gt > 0 else np.full(n, a.g_term)
     gt = np.minimum(gt, ww - 1.0)
-    disc = 1 / (1 + ww[:, None] / 100) ** np.arange(1, N + 1)
-    tv = fcff[:, -1] * (1 + gt / 100) / (ww / 100 - gt / 100) * disc[:, -1]
-    ps = ((fcff * disc).sum(axis=1) + tv + nc) / shares_wan
+    t, frac = periods(N, float(np.clip(a.stub, 0.0, 1.0)), a.mid_year)
+    disc = 1 / (1 + ww[:, None] / 100) ** t
+    gf = 1 + gt / 100                                  # 终值年：与 terminal_year 相同的口径
+    rev_ty = rev[:, -1] * gf
+    fcff_ty = (nopat[:, -1] * gf + rev_ty * drv["da"][-1] / 100 - rev_ty * a.capex_ty / 100
+               - (rev_ty - rev[:, -1]) * a.nwc_pct / 100)
+    tv = fcff_ty / (ww / 100 - gt / 100) * disc[:, -1]
+    ps = ((fcff * frac * disc).sum(axis=1) + tv + nc) / shares_wan
     return {"第1年归母净利润": parent[:, 0], "第1年核心经营利润率": m[:, 0],
             "每股价值": ps, "增速σ": sg, "利润率σ": sm,
             "抽样": pd.DataFrame({"营收增速": g.mean(axis=1), "核心经营利润率": m.mean(axis=1),
