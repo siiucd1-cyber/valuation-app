@@ -38,6 +38,18 @@ _MSG = [
     (r"行情接口未返回该代码的数据", "Quote endpoint returned no data for this code"),
     (r"请输入 6 位 A 股代码，例如 688230", "Please enter a 6-digit A-share code, e.g. 688230"),
     (r"无法识别的股票代码", "Unrecognised stock code"),
+    (r"北交所股票已改用 920 开头的新代码，请输入新代码（例如 920047）",
+     "Beijing Stock Exchange stocks now use codes starting with 920; please enter the new code (e.g. 920047)"),
+    (r"暂不支持 B 股", "B shares are not supported"),
+    (r"(\d{6}) 属于(银行|保险公司|证券公司)。金融企业的收入来自利息、手续费或保费，没有一般意义上的资本开支和营运资金，"
+     r"自由现金流折现法不适用，本工具暂不支持（这类公司通常用市净率或股利折现估值）",
+     lambda m: f"{m.group(1)} is {dict(银行='a bank', 保险公司='an insurer', 证券公司='a securities firm')[m.group(2)]}. "
+               "Financial firms earn interest, fees or premiums and have no conventional capex or working capital, "
+               "so free-cash-flow DCF does not apply and this tool does not support them (they are usually valued on P/B "
+               "or a dividend discount model)"),
+    (r"东方财富没有 (\d{6}) 的财务报表，请确认代码是否正确", r"Eastmoney has no financial statements for \1; please check the code"),
+    (r"(\d{6}) 的利润表没有营业总收入科目（多见于金融企业），本工具暂不支持",
+     r"The income statement of \1 has no total operating revenue line (typical of financial firms); not supported"),
     (r"周线样本不足 30 周", "fewer than 30 weekly observations"),
     (r"折现率必须高于永续增长率", "The discount rate must exceed the terminal growth rate"),
     (r"默认清单（Wind 全球可比公司）", "Default list (Wind global comparables)"),
@@ -58,6 +70,8 @@ def tr_msg(s: str) -> str:
 
 
 ZH = {
+    "NO_REVENUE": "{y} 年营业收入为 0：本工具的折现法以营收增速和利润率驱动，不适用于尚未产生收入的公司（如未商业化的创新药企），"
+                  "这类公司通常按研发管线里程碑或最近一轮融资估值。",
     "STMT_EDIT_NOTE": ("点击蓝色格子即可直接修改（营收增速、核心经营利润率、投资收益及其他、资本开支 / 营收、折旧摊销 / 营收），"
                        "回车后三张表、折现法、蒙特卡洛与敏感性分析全部重算，改过的格子变成黄底；清空格子即恢复默认。"
                        "历史列来自财报接口，锁定不可修改；如需使用自己核对过的数据，请在左侧选择「上传年报 PDF」。"),
@@ -166,6 +180,11 @@ EN = {
     "股票代码": "Stock code",
     "加载": "Load",
     "可用演示代码：": "Demo codes available: ",
+    "NO_REVENUE": "{y} revenue is zero: this DCF is driven by revenue growth and margins, so it does not apply to companies "
+                  "that have no revenue yet (e.g. pre-commercial biotech). Such companies are usually valued on pipeline "
+                  "milestones or the latest funding round.",
+    "；输入其他代码会自动改为实时获取": "; any other code is fetched live automatically",
+    "演示数据只有 {d}，已切换到「实时数据」获取 {c}。": "The demo snapshot only covers {d}; switched to Live to fetch {c}.",
     "正在从东方财富、腾讯、新浪拉取数据（首次约 30–60 秒，之后一小时内有缓存）……":
         "Fetching data from Eastmoney, Tencent and Sina (about 30–60 s the first time, cached for an hour afterwards)…",
     "实时数据获取失败，已改用演示快照。原因：{e}": "Live data failed; using the demo snapshot instead. Reason: {e}",

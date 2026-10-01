@@ -138,6 +138,12 @@ def tornado_fig(tor: pd.DataFrame, height: int = 330) -> go.Figure:
 
 
 # ─────────────────────────── 由数据推出默认假设
+def _fin(x, fallback: float = 0.0) -> float:
+    """非有限值（营收为 0 时的除零、缺数据时的空值）换成兜底值，避免滑块报错。"""
+    x = float(x) if x is not None else float("nan")
+    return x if np.isfinite(x) else fallback
+
+
 def defaults_from(cd: dict) -> M.Assumptions:
     a = cd["annual"]
     L = a.iloc[-1]
@@ -151,22 +157,26 @@ def defaults_from(cd: dict) -> M.Assumptions:
         g1 = ttm["TTM同比增速%"].iloc[-1]
     else:
         g1 = L["营收增速%"]
-    g1 = float(np.clip(g1, -30, 60))
-    m1 = float(ttm["TTM核心经营利润率%"].iloc[-1]) if not ttm.empty else float(L["核心经营利润率%"])
+    g1 = float(np.clip(_fin(g1), -30, 60))
+    m1 = _fin(ttm["TTM核心经营利润率%"].iloc[-1], np.nan) if not ttm.empty else np.nan
+    if not np.isfinite(m1):
+        m1 = _fin(L["核心经营利润率%"])
+    m1 = float(np.clip(m1, -1000, 100))
     if it and "累计投资收益及其他" in it and it["季度数"]:
         other1 = it["累计投资收益及其他"] * 4 / it["季度数"]
     else:
         other1 = float(L["投资收益及其他"])
-    da = float(np.clip(last3["折旧摊销/营收%"].median(), 0, 20))
-    capex = float(max(last3["资本开支/营收%"].median(), da))
-    nwc = float(np.clip(last3["营运资本/营收%"].median(), 0, 60))
+    fmed = lambda c: _fin(last3[c].replace([np.inf, -np.inf], np.nan).median())
+    da = float(np.clip(fmed("折旧摊销/营收%"), 0, 20))
+    capex = float(np.clip(max(fmed("资本开支/营收%"), da), 0, 300))
+    nwc = float(np.clip(fmed("营运资本/营收%"), 0, 60))
     mcap = cd["quote"]["mcap_yi"]
     return M.Assumptions(
         g_first=round(g1, 1), g_last=round(float(np.clip(g1 * 0.4, 3, 10)), 1),
         m_first=round(m1, 1), m_last=round(m1, 1),
-        other_first=round(float(other1), 0), other_change=-15.0, other_in_fcf=0.0,
-        tax=round(float(np.clip(L["有效税率%"], 0, 30)), 2),
-        minority=round(float(np.clip(L["少数股东占比%"], 0, 60)), 2),
+        other_first=round(_fin(other1), 0), other_change=-15.0, other_in_fcf=0.0,
+        tax=round(float(np.clip(_fin(L["有效税率%"], 25.0), 0, 30)), 2),
+        minority=round(float(np.clip(_fin(L["少数股东占比%"]), 0, 60)), 2),
         da_pct=round(da, 2), capex_pct=round(capex, 2), nwc_pct=round(nwc, 2),
         rf=round(cd["rf"], 2) if cd.get("rf") else 1.7,
         beta=round(cd["beta"]["beta"], 2) if cd.get("beta") else 1.2,
@@ -287,6 +297,9 @@ with st.sidebar:
     st.markdown("## " + T("估值工作台"))
     st.caption(T("输入 A 股代码，自动拉取财报；左侧所有假设可调，结果即时重算。"))
     MODES = {"live": "实时数据", "demo": "演示数据（离线）", "pdf": "上传年报 PDF"}
+    to_live = st.session_state.pop("_to_live", None)   # 上一轮在演示模式里输入了没有快照的代码 → 改为实时获取
+    if to_live:
+        st.session_state["mode"] = "live"
     mode = st.radio(T("数据来源"), list(MODES), index=1 if ON_CLOUD else 0, key="mode",
                     format_func=lambda m: T(MODES[m]), help=T("MODE_HELP"))
     if mode == "pdf":
@@ -304,9 +317,15 @@ with st.sidebar:
                                     max_chars=6)
             go_btn = st.form_submit_button(T("加载"), width="stretch")
         if mode == "demo" and data.demo_codes():
-            st.caption(T("可用演示代码：") + "、".join(data.demo_codes()))
+            st.caption(T("可用演示代码：") + "、".join(data.demo_codes()) + T("；输入其他代码会自动改为实时获取"))
 
 code = str(code_in).strip()
+demo_list = data.demo_codes()
+if mode == "demo" and demo_list and code not in demo_list:
+    if go_btn:      # 演示快照里没有这个代码：切到实时数据去取，而不是报「找不到文件」
+        st.session_state.update(code=code, _to_live=code)
+        st.rerun()
+    code = demo_list[0]
 TOP = st.empty()     # 固定占位：进度条、加载提示、回退警告都放这里，避免页签位置变化导致选中的页签被重置
 if mode == "pdf":
     if not ups:
@@ -356,11 +375,16 @@ elif go_btn or "cd" not in st.session_state or st.session_state.get("key") != f"
         if os.path.exists(os.path.join(data.DEMO_DIR, f"{code}.json")):
             TOP.warning(T("实时数据获取失败，已改用演示快照。原因：{e}", e=tr_msg(str(e))))
             cd = fetch_demo(code)
+        elif isinstance(e, ValueError):     # 代码不合法或公司类型不适用：直接说明原因
+            st.warning(tr_msg(str(e)))
+            st.stop()
         else:
             st.error(T("数据获取失败：{e}", e=tr_msg(str(e))))
             st.stop()
     st.session_state.update(cd=cd, key=key, code=code)
     reset_state(defaults_from(cd))
+    if to_live:
+        TOP.info(T("演示数据只有 {d}，已切换到「实时数据」获取 {c}。", d="、".join(demo_list), c=code))
 
 if mode == "pdf":
     # 解析结果可在「计算表」页签修改；修改记录在 pdf_ovr 中，这里先应用，保证整套估值用的是修改后的数据
@@ -393,11 +417,14 @@ if mode == "live":
         pass
 base_year = int(an.index.max())
 rev0 = float(an.loc[base_year, "营业总收入"])
+if not rev0 > 0:
+    st.warning(T("NO_REVENUE", y=base_year)); st.stop()
 shares_wan = q["shares"] / 1e4
 mcap_wan = q["mcap_yi"] * 1e4
 dflt = defaults_from(cd)
 # 滑块上限随数据放宽（如高毛利公司核心经营利润率可超过 60%）
 m_hi = float(max(60.0, np.ceil((max(dflt.m_first, dflt.m_last) + 15) / 5) * 5))
+m_lo = float(max(-1000.0, min(-10.0, np.floor((min(dflt.m_first, dflt.m_last) - 15) / 5) * 5)))
 cx_hi = float(max(30.0, np.ceil((dflt.capex_pct + 10) / 5) * 5))
 
 # ─────────────────────────── 侧边栏：假设
@@ -410,10 +437,10 @@ with st.sidebar:
                   help=T("默认值：{v}%，取最新一期累计营收同比或滚动 TTM 增速", v=dflt.g_first))
         st.slider(T("第5年营收增速（%）"), -10.0, 40.0, key="a_g_last", step=0.5,
                   help=T("中间年份按线性插值"))
-        st.slider(T("第1年核心经营利润率（%）"), -10.0, m_hi, key="a_m_first", step=0.1,
+        st.slider(T("第1年核心经营利润率（%）"), m_lo, m_hi, key="a_m_first", step=0.1,
                   help=T("默认值：{v}%，取最新滚动 TTM；定义为（营业总收入−营业总成本）÷ 营业总收入",
                          v=dflt.m_first))
-        st.slider(T("第5年核心经营利润率（%）"), -10.0, m_hi, key="a_m_last", step=0.1)
+        st.slider(T("第5年核心经营利润率（%）"), m_lo, m_hi, key="a_m_last", step=0.1)
         st.number_input(T("第1年投资收益及其他（万元）"), key="a_other_first", step=100.0,
                         help=T("= 利润总额 − 核心经营利润，含理财收益、政府补助、公允价值变动等"))
         st.slider(T("投资收益及其他年变化（%）"), -50.0, 50.0, key="a_other_change", step=1.0)

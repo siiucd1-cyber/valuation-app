@@ -13,6 +13,7 @@ import datetime as dt
 import io
 import json
 import os
+import re
 import threading
 import warnings
 
@@ -62,17 +63,25 @@ def retry(fn, tries: int = 3, wait: float = 1.5, timeout: float = 45):
         time.sleep(wait * (i + 1))
     raise last
 
+class Unsupported(ValueError):
+    """代码有效但本工具不适用（金融企业、B 股、北交所旧代码等），直接把原因告诉用户。"""
+
+
 def market_of(code: str) -> tuple[str, str]:
     """返回 (报表前缀, 东财 secid 市场号)"""
     code = code.strip()
     if len(code) != 6 or not code.isdigit():
         raise ValueError("请输入 6 位 A 股代码，例如 688230")
-    if code.startswith(("6", "9")):
-        return "SH", "1"
-    if code.startswith(("0", "2", "3")):
-        return "SZ", "0"
-    if code.startswith(("4", "8")):
+    if code.startswith("92"):
         return "BJ", "0"
+    if code.startswith(("4", "8")):
+        raise Unsupported("北交所股票已改用 920 开头的新代码，请输入新代码（例如 920047）")
+    if code.startswith("6"):
+        return "SH", "1"
+    if code.startswith(("0", "3")):
+        return "SZ", "0"
+    if code.startswith(("2", "9")):
+        raise Unsupported("暂不支持 B 股")
     raise ValueError("无法识别的股票代码")
 
 
@@ -136,21 +145,46 @@ def fetch_quote_tencent(code: str) -> dict:
             "ts": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 
+F10_URL = "https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/Index"
+FIN_TYPES = {"1": "证券公司", "2": "保险公司", "3": "银行"}   # 东方财富 F10 的报表模板类型，4 为一般企业
+
+
+def company_type(sym: str) -> str | None:
+    """东方财富 F10 页面里的报表模板类型；取不到时返回 None（交给 akshare 自己判断）。"""
+    def get():
+        r = requests.get(F10_URL, params={"type": "web", "code": sym.lower()}, headers=UA, timeout=10)
+        m = re.search(r'id="hidctype"[^>]*value="(\d+)"', r.text)
+        return m.group(1) if m else None
+    try:
+        return retry(get, tries=2, timeout=15)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def fetch_statements(code: str) -> dict[str, pd.DataFrame]:
     import akshare as ak
     pre, _ = market_of(code)
     sym = f"{pre}{code}"
+    ct = company_type(sym)
+    if ct in FIN_TYPES:
+        raise Unsupported(f"{code} 属于{FIN_TYPES[ct]}。金融企业的收入来自利息、手续费或保费，没有一般意义上的"
+                          "资本开支和营运资金，自由现金流折现法不适用，本工具暂不支持（这类公司通常用市净率或股利折现估值）")
     out = {
         "pl": retry(lambda: ak.stock_profit_sheet_by_report_em(symbol=sym)),
         "bs": retry(lambda: ak.stock_balance_sheet_by_report_em(symbol=sym)),
         "cf": retry(lambda: ak.stock_cash_flow_sheet_by_report_em(symbol=sym)),
     }
     for k, df in out.items():
+        if df is None or df.empty or "REPORT_DATE" not in df.columns:
+            raise Unsupported(f"东方财富没有 {code} 的财务报表，请确认代码是否正确")
         df["REPORT_DATE"] = pd.to_datetime(df["REPORT_DATE"])
+    if "TOTAL_OPERATE_INCOME" not in out["pl"].columns:
+        raise Unsupported(f"{code} 的利润表没有营业总收入科目（多见于金融企业），本工具暂不支持")
     return out
 
 
 TENCENT_KLINE = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+TENCENT_KLINE2 = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
 
 
 def _tag(s: pd.Series, src: str) -> pd.Series:
@@ -166,6 +200,10 @@ def fetch_kline_tencent(symbol: str, start: str, adjust: str = "qfq") -> pd.Seri
     j = retry(lambda: requests.get(TENCENT_KLINE, params=p, headers=UA, timeout=10).json(), tries=2, timeout=15)
     node = (j.get("data") or {}).get(symbol) or {}
     rows = node.get(f"{adjust}day") or node.get("day") or []
+    if len(rows) < 30:   # 北交所代码在这个接口只返回最新一天，改用 newfqkline（按结束日往前取最多 800 条）
+        j = retry(lambda: requests.get(TENCENT_KLINE2, params=p, headers=UA, timeout=10).json(), tries=2, timeout=15)
+        node = (j.get("data") or {}).get(symbol) or {}
+        rows = node.get(f"{adjust}day") or node.get("day") or rows
     if not rows:
         raise RuntimeError("腾讯行情接口未返回日线数据")
     s = pd.Series({pd.Timestamp(r[0]): float(r[2]) for r in rows}).sort_index()
@@ -412,6 +450,8 @@ def load_company(code: str) -> dict:
     """抓取全部数据。任何一项失败都不会中断，失败项记录在 status 中。"""
     try:
         st = fetch_statements(code)
+    except Unsupported:
+        raise
     except Exception as e:
         raise RuntimeError(f"财务报表抓取失败，无法继续：{e}")
     m = load_market(code)
