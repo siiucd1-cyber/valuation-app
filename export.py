@@ -198,7 +198,8 @@ def write_dcf(wb, R: dict, SF: str, SS: str, base_label: str, base_cells: dict,
               ("终值年自由现金流为正", f"=IF({ty('fcff')}>0,{q(ok)},{q(bad)})", "为负时终值没有意义"),
               ("终值年资本开支不低于折旧摊销", f"=IF({ty('cx_pct')}>={ty('da_pct')}-0.0001,{q(ok)},{q(warn)})",
                "稳定状态下资本开支至少维持现有资产"),
-              ("终值占企业价值不超过 85%", f"=IF({B('tvp')}<=85,{q(ok)},{q(warn)})", "过高说明估值主要依赖永续假设")]
+              ("终值占企业价值不超过 85%", f"=IF({B('tvp')}<=85,{q(ok)},{q(warn)})", "过高说明估值主要依赖永续假设"),
+              ("股权价值为正", f"=IF({B('eq')}>0,{q(ok)},{q(bad)})", "为负时不作为估值结论，需按原因调整假设或改用其他方法")]
     checks += list(extra_checks or [])
     c0 = X["chk"]
     wf.cell(row=c0 - 2, column=1, value=T("模型检查")).font = TITLE
@@ -267,7 +268,7 @@ def build_workbook(cd: dict, A, res: dict) -> bytes:
     wb = Workbook()
     wb.remove(wb.active)
     SA, SF, SS = [_sheet(x) for x in ("假设", "预测与折现法", "敏感性")]
-    n = 5
+    n = int(A.years)
 
     # ── 说明
     ws = wb.create_sheet(_sheet("说明"))
@@ -280,7 +281,7 @@ def build_workbook(cd: dict, A, res: dict) -> bytes:
             ("模型结构", "营业总收入 × 核心经营利润率 = 核心经营利润；+ 投资收益及其他 = 利润总额；"
                      "× (1 − 有效税率) × (1 − 少数股东占比) = 归母净利润。"),
             ("折现时点", "估值基准日取最新报表日（与净现金同一时点），第 1 年只计入基准日之后的部分；默认年中折现。"),
-            ("终值", "资本开支 / 营收从第 1 年线性过渡到稳定水平（第 5 年）；「终值年」= 第 5 年按永续增长率外推一年，"
+            ("终值", "资本开支 / 营收从第 1 年线性过渡到稳定水平（预测末年）；「终值年」= 预测末年按永续增长率外推一年，"
                    "营运资金按永续增速计算；终值 = 终值年 FCFF ÷ (WACC − g)。"),
             ("交叉检验", "「预测与折现法」表下方：折现法隐含的 EV/EBITDA、市盈率与现价倍数并列，以及模型检查结果。"),
             ("数据来源", "东方财富（报表、行情、国债）、腾讯（日线、行情备用）、新浪（日线备用）公开接口，经 akshare 与直接请求获取。非官方授权数据。"),
@@ -306,7 +307,7 @@ def build_workbook(cd: dict, A, res: dict) -> bytes:
         ("sp", "规模溢价（%）", A.size_prem, ""),
         ("kd", "税前债务成本（%）", A.kd, ""),
         ("gt", "永续增长率（%）", A.g_term, ""),
-        ("cx_ty", "第5年及终值年资本开支 / 营收（%）", A.capex_ty, "稳定状态的维持性资本开支，默认等于折旧摊销 / 营收；预测期从第 1 年线性过渡到此值"),
+        ("cx_ty", T("第{n}年及终值年资本开支 / 营收（%）", n=n), A.capex_ty, "稳定状态的维持性资本开支，默认等于折旧摊销 / 营收；预测期从第 1 年线性过渡到此值"),
         ("mid", "年中折现（1=是，0=否）", int(A.mid_year), "现金流按各期中点折现"),
         ("stub", "第 1 年计入比例", A.stub, T("STUB_NOTE", d=bs["报告期"])),
         ("cash", "货币资金（万元）", bs["货币资金"], bs["报告期"]),
@@ -333,7 +334,7 @@ def build_workbook(cd: dict, A, res: dict) -> bytes:
         "other": (float(L["投资收益及其他"]), BLUE), "pbt": (float(L["利润总额"]), BLUE),
         "np": (float(L["归母净利润"]), BLUE), "da_pct": (float(L["折旧摊销/营收%"]), BLUE),
         "cx_pct": (float(L["资本开支/营收%"]), BLUE)},
-        base_year=base, yr_cells={k: [(float(x), BLUE) for x in drv[src]] for k, src in
+        base_year=base, n=n, yr_cells={k: [(float(x), BLUE) for x in drv[src]] for k, src in
                                   (("g", "g"), ("m", "m"), ("other", "other"), ("da_pct", "da"), ("cx_pct", "capex"))})
 
     # ── 历史数据

@@ -56,6 +56,7 @@ def build_template(example: dict | None = None) -> bytes:
 
 def _build(example: dict | None) -> bytes:
     yr_cells = None
+    NF = int(example["A"].years) if example and example.get("A") is not None else 5      # 预测期年数
     if example and example.get("drv") is not None and example.get("ovr"):
         # 网页上手动改过逐年假设：预测表中改为逐年数值（蓝色），否则仍用首末年插值公式
         d = example["drv"]
@@ -85,8 +86,8 @@ def _build(example: dict | None) -> bytes:
         ("自由现金流", "FCFF = 税后经营利润 + 折旧摊销 − 资本开支 − 营运资金增加；营运资金增加 = 营收增量 × 营运资本/营收。"),
         ("折现率", "股权成本 = 无风险利率 + 贝塔 × 市场风险溢价 + 规模溢价；WACC 按有息负债与总市值加权。"),
         ("折现时点", "第 1 年只计入估值基准日之后的部分（「假设」表的计入比例）；默认年中折现，现金流按各期中点折现。"),
-        ("终值", "资本开支 / 营收从第 1 年线性过渡到稳定水平（第 5 年，默认等于折旧摊销）；「终值年」= 第 5 年按永续增长率"
-               "外推一年，营运资金按永续增速计算；终值 = 终值年 FCFF ÷ (WACC − g)。"),
+        ("终值", "资本开支 / 营收从第 1 年线性过渡到稳定水平（预测末年，默认等于折旧摊销）；「终值年」= 预测末年按永续增长率"
+               "外推一年，营运资金按永续增速计算；终值 = 终值年 FCFF ÷ (WACC − g)。预测期年数随网页设置（默认 5 年）。"),
         ("交叉检验", "「预测与折现法」表下方列出折现法隐含的 EV/EBITDA、市盈率与现价倍数，以及模型检查（通过 / 需关注 / 未通过）。"),
         ("单位", "金额：万元；股本：万股；每股：元；比率：%。"),
     ]
@@ -157,10 +158,10 @@ def _build(example: dict | None) -> bytes:
         # key, 名称, 假设值（None=公式）, 历史参考公式, 说明
         ("base_rev", "基期营业总收入（万元）", f"={H}{LAST}6", None, "取历史数据最近一年，无需填写"),
         ("g1", "第1年营收增速（%）", g("g_first"), _ie(f"{H}{LAST}26"), "参考：最近一年增速；中间年份线性插值"),
-        ("g5", "第5年营收增速（%）", g("g_last"), _ie(f"(({H}{LAST}6/{H}B6)^(1/{YEARS - 1})-1)*100"),
+        ("g5", f"第{NF}年营收增速（%）", g("g_last"), _ie(f"(({H}{LAST}6/{H}B6)^(1/{YEARS - 1})-1)*100"),
          "参考：近 4 年复合增速；远期一般向行业长期增速收敛"),
         ("m1", "第1年核心经营利润率（%）", g("m_first"), _ie(f"{H}{LAST}28"), "参考：最近一年"),
-        ("m5", "第5年核心经营利润率（%）", g("m_last"), _ie(f"AVERAGE({H}B28:{LAST}28)"), "参考：5 年平均"),
+        ("m5", f"第{NF}年核心经营利润率（%）", g("m_last"), _ie(f"AVERAGE({H}B28:{LAST}28)"), "参考：5 年平均"),
         ("o1", "第1年投资收益及其他（万元）", g("other_first"), _ie(f"{H}{LAST}29"),
          "利润总额 − 核心经营利润，含理财收益、政府补助等；参考：最近一年"),
         ("oc", "投资收益及其他年变化（%）", g("other_change", -15.0), None, "理财规模或收益率下行时取负值"),
@@ -170,7 +171,7 @@ def _build(example: dict | None) -> bytes:
         ("mino", "少数股东占比（%）", g("minority"), _ie(f"{H}{LAST}31"), "参考：最近一年"),
         ("da", "折旧摊销 / 营收（%）", g("da_pct"), _ie(f"MEDIAN({H}{last3.format(r=33)})"), "参考：近 3 年中位数"),
         ("cx", "第1年资本开支 / 营收（%）", g("capex_pct"), _ie(f"MEDIAN({H}{last3.format(r=34)})"),
-         "参考：近 3 年中位数；中间年份线性过渡到第 5 年"),
+         f"参考：近 3 年中位数；中间年份线性过渡到第 {NF} 年"),
         ("nwc", "营运资本 / 营收（%）", g("nwc_pct"), _ie(f"MEDIAN({H}{last3.format(r=36)})"),
          "营运资金增加 = 营收增量 × 此比例；参考：近 3 年中位数"),
         ("rf", "无风险利率（%）", g("rf", 1.7), None, "10 年期国债收益率"),
@@ -179,7 +180,7 @@ def _build(example: dict | None) -> bytes:
         ("sp", "规模溢价（%）", g("size_prem", 0.0), None, "小市值公司可加 0.5–1.0"),
         ("kd", "税前债务成本（%）", g("kd", 3.5), None, ""),
         ("gt", "永续增长率（%）", g("g_term", 2.5), None, "一般不高于长期名义 GDP 增速"),
-        ("cx_ty", "第5年及终值年资本开支 / 营收（%）", g("capex_ty"), _ie(f"MEDIAN({H}{last3.format(r=33)})"),
+        ("cx_ty", f"第{NF}年及终值年资本开支 / 营收（%）", g("capex_ty"), _ie(f"MEDIAN({H}{last3.format(r=33)})"),
          "稳定状态的维持性资本开支，一般取折旧摊销 / 营收；参考：折旧率近 3 年中位数"),
         ("mid", "年中折现（1=是，0=否）", int(A.mid_year) if A is not None else 1, None, "现金流按各期中点折现，估值报告通行做法"),
         ("stub", "第 1 年计入比例", g("stub", 1.0), None,
@@ -215,7 +216,7 @@ def _build(example: dict | None) -> bytes:
         "m": (f"={H}{LAST}28", BLACK), "core": (f"={H}{LAST}27", BLACK),
         "other": (f"={H}{LAST}29", BLACK), "pbt": (f"={H}{LAST}8", BLACK),
         "np": (f"={H}{LAST}11", BLACK), "da_pct": (f"={H}{LAST}33", BLACK),
-        "cx_pct": (f"={H}{LAST}34", BLACK)}, base_year=base_year, yr_cells=yr_cells,
+        "cx_pct": (f"={H}{LAST}34", BLACK)}, base_year=base_year, n=NF, yr_cells=yr_cells,
         extra_checks=[("历史数据录入勾稽（各年偏差小于 1 万元）",
                        f'=IF(COUNT({H}B39:{LAST}39)=0,"需关注",IF(COUNTIF({H}B39:{LAST}39,">=1")'
                        f'+COUNTIF({H}B39:{LAST}39,"<=-1")=0,"通过","未通过"))',

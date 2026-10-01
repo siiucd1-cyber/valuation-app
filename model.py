@@ -16,12 +16,12 @@ import pandas as pd
 
 @dataclass
 class Assumptions:
-    years: int = 5
+    years: int = 5                 # 预测期（年）：5 / 7 / 10
     # 收入与利润
     g_first: float = 15.0          # 第 1 年营收增速 %
-    g_last: float = 6.0            # 第 5 年营收增速 %
+    g_last: float = 6.0            # 预测末年营收增速 %
     m_first: float = 15.0          # 第 1 年核心经营利润率 %
-    m_last: float = 15.0           # 第 5 年核心经营利润率 %
+    m_last: float = 15.0           # 预测末年核心经营利润率 %
     other_first: float = 0.0       # 第 1 年投资收益及其他（万元）
     other_change: float = -10.0    # 投资收益及其他年变化 %
     other_in_fcf: float = 0.0      # 投资收益及其他中计入经营现金流的比例 %
@@ -31,7 +31,7 @@ class Assumptions:
     da_pct: float = 2.5            # 折旧摊销 / 营收 %
     capex_pct: float = 3.0         # 资本开支 / 营收 %
     nwc_pct: float = 10.0          # 营运资金增加 / 营收增量 %
-    capex_ty: float = 2.5          # 第 5 年及终值年资本开支 / 营收 %（稳定状态，默认 = 折旧摊销 / 营收，即维持性资本开支）
+    capex_ty: float = 2.5          # 预测末年及终值年资本开支 / 营收 %（稳定状态，默认 = 折旧摊销 / 营收，即维持性资本开支）
     # 折现率
     rf: float = 1.7
     beta: float = 1.2
@@ -73,7 +73,7 @@ def drivers(a: Assumptions, over: dict | None = None) -> dict:
          "m": np.linspace(a.m_first, a.m_last, n),
          "other": a.other_first * (1 + a.other_change / 100) ** np.arange(n),
          "da": np.full(n, float(a.da_pct)),
-         "capex": np.linspace(a.capex_pct, a.capex_ty, n)}      # 从第 1 年线性过渡到稳定状态（第 5 年 = 终值年）
+         "capex": np.linspace(a.capex_pct, a.capex_ty, n)}      # 从第 1 年线性过渡到稳定状态（预测末年 = 终值年）
     for k, cells in (over or {}).items():
         if k in d:
             for i, v in cells.items():
@@ -164,6 +164,20 @@ def dcf(fc: pd.DataFrame, w: float, g_term: float, nc: float, shares_wan: float)
             "终值年": ty, "终值": tv, "终值现值": tv_pv, "企业价值": ev, "净现金": nc, "股权价值": eq,
             "每股价值": eq / shares_wan, "终值占比%": tv_pv / ev * 100 if ev else np.nan,
             "终值隐含EV/EBITDA": tv / ty["EBITDA"] if ty["EBITDA"] > 0 else np.nan}
+
+
+def value_status(D: dict) -> str:
+    """折现法结果的类型。每股价值为正时为 ok；为负时区分原因（实务中的处理方法不同）：
+    ty_neg：终值年自由现金流不为正，即假设公司在稳定状态仍然亏损或净流出现金，假设自相矛盾；
+    ev_neg：终值为正，但预测期投入过大，企业价值为负（预测期只覆盖了投入期，未覆盖回报期）；
+    eq_neg：企业价值为正，但不足以覆盖净负债（困境企业，股权价值下限为 0）。"""
+    if D["股权价值"] > 0:
+        return "ok"
+    if D["终值年"]["FCFF"] <= 0:
+        return "ty_neg"
+    if D["企业价值"] <= 0:
+        return "ev_neg"
+    return "eq_neg"
 
 
 def _ratio(a: float, b: float) -> float:
@@ -329,7 +343,11 @@ def monte_carlo(rev0: float, a: Assumptions, w: float, nc: float, shares_wan: fl
     z1 = rng.standard_normal((n, N))
     z2 = rho * z1 + np.sqrt(max(1 - rho ** 2, 0)) * rng.standard_normal((n, N))
     g = np.clip(g0 + sg * z1, -60, 150)
-    m = np.clip(m0 + sm * z2, -30, 70)
+    # 利润率上下限：一般为 −30% 至 70%；假设本身超出这一范围的年份（如深度亏损公司）按 ±3σ 放宽，
+    # 否则截断会让模拟均值偏离假设。假设在范围内的股票不受影响
+    m_lo = np.where(m0 < -30, m0 - 3 * sm, -30.0)
+    m_hi = np.where(m0 > 70, m0 + 3 * sm, 70.0)
+    m = np.clip(m0 + sm * z2, m_lo, m_hi)
     other = drv["other"]
     rev = rev0 * np.cumprod(1 + g / 100, axis=1)
     prev = np.concatenate([np.full((n, 1), rev0), rev[:, :-1]], axis=1)
@@ -424,8 +442,8 @@ def bridge(a: Assumptions, rev0: float, base_year: int, bs: dict, mcap_wan: floa
         ("贝塔调为 1.0（市场平均风险）", {"beta": 1.0}, None),
         ("去掉规模溢价", {"size_prem": 0.0}, None),
         ("投资收益全部计入现金流、不再下降", {"other_in_fcf": 100.0}, ("other", None)),
-        ("第5年营收增速 +10pp", {}, ("g", 10 * ramp)),
-        ("第5年核心经营利润率 +5pp", {}, ("m", 5 * ramp)),
+        ("预测末年营收增速 +10pp", {}, ("g", 10 * ramp)),
+        ("预测末年核心经营利润率 +5pp", {}, ("m", 5 * ramp)),
         ("永续增长率 +1pp", {"g_term": a.g_term + 1}, None),
     ]
     cur, d, rows = a, _dcopy(drv), []

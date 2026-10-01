@@ -112,16 +112,20 @@ def tr_index(df: pd.DataFrame, cols: bool = False) -> pd.DataFrame:
 
 
 def value_hist(v: np.ndarray, pct: dict, price: float, p_above: float, height: int = 330) -> go.Figure:
-    f = go.Figure(go.Histogram(x=v, nbinsx=70, marker_color=LIGHT, marker_line=dict(color=GREY, width=0.3)))
+    lo_, hi_ = np.percentile(v, 0.5), np.percentile(v, 99.5)
+    # 分布跨到负值（多为亏损公司，尾部极宽）时只在 0.5%–99.5% 分位内分箱，否则少数极端值会把直方图压成一两根柱子；
+    # 正常股票仍按原方式绘制
+    bins = dict(xbins=dict(start=lo_, end=hi_, size=(hi_ - lo_) / 70)) if lo_ <= 0 and hi_ > lo_ else dict(nbinsx=70)
+    f = go.Figure(go.Histogram(x=v, **bins, marker_color=LIGHT, marker_line=dict(color=GREY, width=0.3)))
     for p_, dash, pos in PCT_LINES:
         f.add_vline(x=pct[p_], line_dash=dash, line_color=DARK, annotation_text=p_, annotation_position=pos)
     f.add_vline(x=price, line_dash="dash", line_color=RED,
                 annotation_text=T("现价 {p:.2f}（高于现价概率 {b:.1%}）", p=price, b=p_above),
                 annotation_position="top left" if price > pct["P50"] else "top right",
                 annotation_font_color=RED)
-    lo_, hi_ = np.percentile(v, 0.5), np.percentile(v, 99.5)
+    x0_ = min(lo_, price)
     f.update_layout(**{**LAYOUT, "height": height}, title=T("折现法每股价值分布（元）"), showlegend=False,
-                    xaxis=dict(range=[min(lo_, price) * 0.9, max(hi_, price) * 1.08]))
+                    xaxis=dict(range=[x0_ * 0.9 if x0_ > 0 else x0_ * 1.1 - 1, max(hi_, price) * 1.08]))
     return f
 
 
@@ -437,14 +441,15 @@ with st.sidebar:
         reset_state(dflt); st.rerun()
 
     with st.expander(T("收入与利润"), expanded=True):
+        NY = st.select_slider(T("预测期（年）"), options=[5, 7, 10], key="a_years", help=T("YEARS_HELP"))
         st.slider(T("第1年营收增速（%）"), -30.0, 80.0, key="a_g_first", step=0.5,
                   help=T("默认值：{v}%，取最新一期累计营收同比或滚动 TTM 增速", v=dflt.g_first))
-        st.slider(T("第5年营收增速（%）"), -10.0, 40.0, key="a_g_last", step=0.5,
+        st.slider(T("第{n}年营收增速（%）", n=NY), -10.0, 40.0, key="a_g_last", step=0.5,
                   help=T("中间年份按线性插值"))
         st.slider(T("第1年核心经营利润率（%）"), m_lo, m_hi, key="a_m_first", step=0.1,
                   help=T("默认值：{v}%，取最新滚动 TTM；定义为（营业总收入−营业总成本）÷ 营业总收入",
                          v=dflt.m_first))
-        st.slider(T("第5年核心经营利润率（%）"), m_lo, m_hi, key="a_m_last", step=0.1)
+        st.slider(T("第{n}年核心经营利润率（%）", n=NY), m_lo, m_hi, key="a_m_last", step=0.1)
         st.number_input(T("第1年投资收益及其他（万元）"), key="a_other_first", step=100.0,
                         help=T("= 利润总额 − 核心经营利润，含理财收益、政府补助、公允价值变动等"))
         st.slider(T("投资收益及其他年变化（%）"), -50.0, 50.0, key="a_other_change", step=1.0)
@@ -456,8 +461,8 @@ with st.sidebar:
         st.slider(T("折旧摊销 / 营收（%）"), 0.0, 20.0, key="a_da_pct", step=0.1)
         st.slider(T("第1年资本开支 / 营收（%）"), 0.0, cx_hi, key="a_capex_pct", step=0.1,
                   help=T("默认取近三年中位数与折旧率的较大者，即长期至少覆盖折旧"))
-        st.slider(T("第5年及终值年资本开支 / 营收（%）"), 0.0, cx_hi, key="a_capex_ty", step=0.1,
-                  help=T("CAPEX_TY_HELP", da=dflt.da_pct))
+        st.slider(T("第{n}年及终值年资本开支 / 营收（%）", n=NY), 0.0, cx_hi, key="a_capex_ty", step=0.1,
+                  help=T("CAPEX_TY_HELP", da=dflt.da_pct, n=NY))
         st.slider(T("营运资金增加 / 营收增量（%）"), 0.0, 60.0, key="a_nwc_pct", step=0.5)
         st.slider(T("分红率（%）"), 0.0, 100.0, key="a_payout", step=5.0,
                   help=T("只影响计算表中预测资产负债表的净现金与权益，不影响折现法"))
@@ -529,8 +534,18 @@ def model_checks() -> list[tuple[str, str, str]]:
         (T("终值年资本开支不低于折旧摊销"), "ok" if TY["资本开支"] >= TY["折旧摊销"] * 0.999 else "warn",
          T("资本开支 {c} vs 折旧摊销 {d} 万元", c=fmt(TY["资本开支"]), d=fmt(TY["折旧摊销"]))),
         (T("终值占企业价值不超过 85%"), "ok" if D["终值占比%"] <= 85 else "warn", f"{D['终值占比%']:.1f}%"),
+        (T("股权价值为正"), "ok" if D["股权价值"] > 0 else "fail", T("每股 {v} 元", v=fmt(D["每股价值"]))),
     ]
     return out
+
+
+VSTAT = M.value_status(D)              # ok / ty_neg / ev_neg / eq_neg
+NEG = VSTAT != "ok"                     # 只有估值为负时才切换展示，正常股票的首页不受影响
+bvps = float(bs.get("归母权益", an.iloc[-1]["归母权益"])) / shares_wan
+
+
+def set_years(n_: int):
+    st.session_state["a_years"] = n_
 
 
 CHECKS = model_checks()
@@ -636,7 +651,7 @@ with tabs[3]:
             a=(MC["第1年归母净利润"] < an.loc[base_year, "归母净利润"]).mean()) + "</div>",
             unsafe_allow_html=True)
         st.markdown("<div class='note'>" + T(
-            "每次模拟同时随机抽取：未来5年的营收增速与核心经营利润率（按上方相关系数联动），以及折现率、永续增长率。"
+            "每次模拟同时随机抽取：预测期各年的营收增速与核心经营利润率（按上方相关系数联动），以及折现率、永续增长率。"
             "均值取左侧假设；第1年已披露 {nq} 个季度，增速波动按剩余 {rest:.0%} 缩小；远期波动逐年放大。",
             nq=it["季度数"] if it else 0, rest=y1_scale) + "</div>", unsafe_allow_html=True)
 
@@ -752,12 +767,25 @@ with tabs[0]:
     k[0].metric(T("现价（元）"), fmt(q["price"]), f"{chg:+.2f}%",
                 delta_color="normal" if is_en() else "inverse", border=True)
     k[1].metric(T("总市值（亿元）"), fmt(q["mcap_yi"]), border=True)
-    k[2].metric(T("折现法（元/股）"), fmt(D["每股价值"]), up(D["每股价值"]), delta_color="off", border=True)
+    if NEG:
+        k[2].metric(T("折现法（元/股）"), T("不适用"), border=True)
+        k[2].caption(T("按当前假设为 {v} 元，见下方说明", v=fmt(D["每股价值"])))
+    else:
+        k[2].metric(T("折现法（元/股）"), fmt(D["每股价值"]), up(D["每股价值"]), delta_color="off", border=True)
     k[3].metric(T("蒙特卡洛中位数（元/股）"), fmt(ps_pct["P50"]), border=True)
     k[3].caption(f"P5–P95  {ps_pct['P5']:.1f} – {ps_pct['P95']:.1f}")
     k[4].metric(T("现价隐含折现率"), f"{iw:.2f}%" if iw == iw else "—", border=True,
                 help=T("IW_HELP"))
     k[4].caption(T("模型折现率 {w:.2f}%", w=W))
+
+    if NEG:                             # 估值为负：说明属于哪种情况、实务中怎么处理
+        msg = T("NEG_TITLE", v=D["每股价值"]) + "\n\n" + T(
+            "NEG_" + VSTAT, n=A.years, f=fmt(TY["FCFF"]), tv=fmt(D["终值"]), ev=fmt(D["企业价值"]),
+            nd=fmt(-ncd["净现金"]), ext=T("NEG_EXT") if A.years < 10 else "",
+            ext2=T("NEG_EXT2") if A.years < 10 else T("NEG_EXT2_10")) + "\n\n" + T("NEG_BOOK", b=fmt(bvps), pb=mx(q["price"] / bvps if bvps > 0 else np.nan))
+        st.warning(msg)
+        if VSTAT in ("ty_neg", "ev_neg") and A.years < 10:
+            st.button(T("改用 10 年预测期"), on_click=set_years, args=(10,), help=T("YEARS_HELP"))
 
     left, right = st.columns([2, 1])
     with left:
@@ -767,23 +795,28 @@ with tabs[0]:
             fp.add_trace(go.Scatter(x=p1.index, y=p1.values, mode="lines", line=dict(color=DARK, width=1.6),
                                     name=T("收盘价"), hovertemplate="%{x|%Y-%m-%d}  %{y:.2f}<extra></extra>"))
             x0, x1 = p1.index[0], p1.index[-1]
-            fp.add_shape(type="rect", x0=x0, x1=x1, y0=ps_pct["P5"], y1=ps_pct["P95"],
-                         fillcolor=LIGHT, opacity=0.45, line_width=0, layer="below")
-            fp.add_hline(y=D["每股价值"], line_dash="dash", line_color=GREY,
-                         annotation_text=f"{T('折现法')} {D['每股价值']:.2f}", annotation_position="top left")
-            fp.add_annotation(x=x1, y=ps_pct["P95"], text=T("蒙特卡洛 P5–P95"), showarrow=False,
-                              xanchor="right", yanchor="bottom", font=dict(size=11, color=GREY))
+            if not NEG:
+                fp.add_shape(type="rect", x0=x0, x1=x1, y0=ps_pct["P5"], y1=ps_pct["P95"],
+                             fillcolor=LIGHT, opacity=0.45, line_width=0, layer="below")
+                fp.add_hline(y=D["每股价值"], line_dash="dash", line_color=GREY,
+                             annotation_text=f"{T('折现法')} {D['每股价值']:.2f}", annotation_position="top left")
+                fp.add_annotation(x=x1, y=ps_pct["P95"], text=T("蒙特卡洛 P5–P95"), showarrow=False,
+                                  xanchor="right", yanchor="bottom", font=dict(size=11, color=GREY))
+            else:
+                fp.add_annotation(x=x0, y=float(p1.max()), text=T("折现法结果为负，未在图中标出"), showarrow=False,
+                                  xanchor="left", yanchor="top", font=dict(size=11, color=GREY))
         else:
             fp.add_annotation(text=T("无股价数据（非上市公司或行情获取失败）"), showarrow=False,
                               x=0.5, y=0.5, xref="paper", yref="paper", font=dict(color=GREY))
-            fp.add_hline(y=D["每股价值"], line_dash="dash", line_color=GREY,
-                         annotation_text=f"{T('折现法')} {D['每股价值']:.2f}", annotation_position="top left")
+            if not NEG:
+                fp.add_hline(y=D["每股价值"], line_dash="dash", line_color=GREY,
+                             annotation_text=f"{T('折现法')} {D['每股价值']:.2f}", annotation_position="top left")
         fp.update_layout(**{**LAYOUT, "height": 360}, title=T("近一年股价与估值"), showlegend=False,
                          yaxis_title=T("元/股"))
         st.plotly_chart(fp, width="stretch")
     with right:
         st.markdown("#### " + T("关键指标"))
-        kv = [(T("市盈率 TTM"), f"{fmt(pe_ttm, 1)}x"),
+        kv = [(T("市盈率 TTM"), f"{fmt(pe_ttm, 1)}x" if pe_ttm == pe_ttm else "n.m."),
               (T("市净率"), f"{fmt(q.get('pb'), 2)}x"),
               (T("52周区间（元）"), f"{fmt(lo52)} – {fmt(hi52)}"),
               (T("贝塔（100周）"), fmt(cd["beta"]["beta"]) if cd.get("beta") else "—"),
@@ -817,14 +850,17 @@ with tabs[0]:
         fb_ = go.Figure(go.Bar(
             y=TL(brg["步骤"]), x=brg["每股价值"], orientation="h",
             marker_color=[DARK if v >= q["price"] else GREY for v in brg["每股价值"]],
-            text=[f"{v:.2f}（WACC {w:.1f}%）" for v, w in zip(brg["每股价值"], brg["折现率%"])],
+            text=[f"{v:.2f}（WACC {w:.1f}%）" if v >= 0 else f"{v:.2f}" for v, w in zip(brg["每股价值"], brg["折现率%"])],
+            customdata=brg["折现率%"], hovertemplate="%{y}: %{x:.2f}（WACC %{customdata:.1f}%）<extra></extra>",
             textposition="outside"))
         fb_.add_vline(x=q["price"], line_dash="dash", line_color=RED,
                       annotation_text=T("现价 {p:.2f}", p=q["price"]), annotation_position="top",
                       annotation_font_color=RED)
         fb_.update_layout(**{**LAYOUT, "height": 320}, title=T("逐步放宽假设后的每股价值（累积）"),
                           yaxis=dict(autorange="reversed"),
-                          xaxis=dict(range=[0, max(brg["每股价值"].max(), q["price"]) * 1.35]))
+                          xaxis=dict(range=[(lambda lo_, hi_: lo_ - 0.35 * (hi_ - lo_) if lo_ < 0 else 0.0)(
+                                                float(brg["每股价值"].min()), max(brg["每股价值"].max(), q["price"]) * 1.35),
+                                            max(brg["每股价值"].max(), q["price"]) * 1.35]))
         st.plotly_chart(fb_, width="stretch")
     with b2:
         st.markdown("**" + T("只调一个参数时，要达到现价需要：") + "**")
@@ -846,9 +882,9 @@ with tabs[0]:
                      hide_index=True, width="stretch")
     with m2_:
         r1_ = mult.iloc[1]
-        st.markdown("<div class='note'>" + T(
+        st.markdown("<div class='note'>" + (T("MULT_NEG") if NEG else T(
             "MULT_SUMMARY", y=fc["年份"].iloc[0], ev=mx(r1_["折现法隐含"]), evm=mx(r1_["按现价"]),
-            pe=mx(mult.iloc[3]["折现法隐含"]), pem=mx(mult.iloc[3]["按现价"]), tv=mx(D["终值隐含EV/EBITDA"])) +
+            pe=mx(mult.iloc[3]["折现法隐含"]), pem=mx(mult.iloc[3]["按现价"]), tv=mx(D["终值隐含EV/EBITDA"]))) +
             "</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='note'>{T('MULT_NOTE')}</div>", unsafe_allow_html=True)
 
@@ -859,6 +895,8 @@ with tabs[0]:
             bars.append((T("52周股价区间"), lo52, hi52))
         bars += [(T("折现法敏感性区间"), float(np.nanmin(sens.values)), float(np.nanmax(sens.values))),
                  (T("蒙特卡洛 P5–P95"), ps_pct["P5"], ps_pct["P95"])]
+        if NEG and bvps > 0:
+            bars.append((T("每股净资产（资产法参考）"), bvps * 0.995, bvps * 1.005))
         ff = go.Figure()
         for i, (lab, lo, hi) in enumerate(bars):
             ff.add_trace(go.Bar(y=[lab], x=[hi - lo], base=[lo], orientation="h",
@@ -869,7 +907,8 @@ with tabs[0]:
                      annotation_text=T("现价 {p:.2f}", p=q["price"]), annotation_position="top")
         ff.update_layout(**{**LAYOUT, "height": 330}, title=T("估值区间汇总（元/股）"),
                          xaxis_title=T("元/股"), yaxis=dict(autorange="reversed"),
-                         xaxis=dict(range=[min([b[1] for b in bars] + [q["price"]]) * 0.85,
+                         xaxis=dict(range=[(lambda v: v * 0.85 if v > 0 else v * 1.2 - 1)(
+                                               min([b[1] for b in bars] + [q["price"]])),
                                            max([b[2] for b in bars] + [q["price"]]) * 1.32]))
         st.plotly_chart(ff, width="stretch")
     with r2:
@@ -886,22 +925,27 @@ with tabs[0]:
         st.plotly_chart(fr, width="stretch")
 
     st.markdown("#### " + T("结果说明"))
-    st.markdown(T(
+    res_txt = T(
         "- **折现法**：折现率 {w:.2f}%（股权成本 {ke:.2f}%，贝塔 {b:.2f}），永续增长率 {g:.2f}%，"
         "得到每股 {v:.2f} 元；终值占企业价值 {tv:.1f}%。其中净现金贡献 {nc:.2f} 元/股，占每股价值的 {ncp:.0%}。\n"
         "- **现价隐含折现率**：要让折现法结果等于现价 {px:.2f} 元，折现率需为 {iw}，模型用的是 {w:.2f}%。\n"
         "- **蒙特卡洛**：{n:,} 次模拟（参数来源：{src}），折现法每股价值中位数 {p50:.2f} 元，"
         "90% 的结果落在 {p5:.2f}–{p95:.2f} 元。",
         w=W, ke=wc["股权成本"], b=A.beta, g=A.g_term, v=D["每股价值"], tv=D["终值占比%"],
-        nc=ncd["净现金"] / shares_wan, ncp=ncd["净现金"] / shares_wan / D["每股价值"],
-        px=q["price"], iw=f"{iw:.2f}%" if iw == iw else T("无解（任何折现率都达不到）"), n=sims, src=emp["方法"], p50=ps_pct["P50"], p5=ps_pct["P5"], p95=ps_pct["P95"]))
+        nc=ncd["净现金"] / shares_wan, ncp=ncd["净现金"] / shares_wan / D["每股价值"] if D["每股价值"] else np.nan,
+        px=q["price"], iw=f"{iw:.2f}%" if iw == iw else T("无解（任何折现率都达不到）"), n=sims, src=emp["方法"],
+        p50=ps_pct["P50"], p5=ps_pct["P5"], p95=ps_pct["P95"])
+    if NEG:                             # 估值为负：第一条换成说明，其余照常
+        res_txt = T("RESULT_NEG", w=W, ke=wc["股权成本"], b=A.beta, g=A.g_term, v=D["每股价值"]) + "\n" + \
+            res_txt.split("\n", 1)[1]
+    st.markdown(res_txt)
     st.markdown(T("- **折现时点**：估值基准日 {d}，{conv}；第 1 年计入基准日之后 {s:.0%} 的现金流。终值按终值年（稳定状态）自由现金流计算。\n"
                   "- **模型检查**：{k}/{n} 项通过{extra}（详见「计算表」页签顶部）。",
                   d=bs["报告期"], conv=T("年中折现") if A.mid_year else T("年末折现"), s=A.stub, k=n_pass, n=len(CHECKS),
                   extra="" if n_pass == len(CHECKS) else T("，未通过：{x}",
                                                           x="、".join(c_ for c_, s_, _ in CHECKS if s_ != "ok"))))
-    if TY["FCFF"] < 0:
-        st.warning(T("FCFF_NEG", cx=A.capex_ty, da=fc["折旧摊销/营收%"].iloc[-1]))
+    if TY["FCFF"] < 0 and not NEG:      # 估值为负时上方已有专门说明
+        st.warning(T("FCFF_NEG", cx=A.capex_ty, da=fc["折旧摊销/营收%"].iloc[-1], n=A.years))
     if W - A.g_term < 4:
         st.warning(T("折现率 {w:.2f}% 与永续增长率 {g:.2f}% 只差 {d:.2f} 个百分点，终值被大幅放大，折现法结果不可靠。",
                      w=W, g=A.g_term, d=W - A.g_term))
@@ -1171,8 +1215,12 @@ with tabs[1]:
     # ── 5. 估值结论
     st.markdown("#### " + T("估值结论"))
     kk = st.columns(4)
-    kk[0].metric(T("每股内在价值（元）"), fmt(D["每股价值"]), T("{p:+.1%} vs 现价", p=D["每股价值"] / q["price"] - 1),
-                 delta_color="off", border=True)
+    if NEG:
+        kk[0].metric(T("每股内在价值（元）"), T("不适用"), T("按当前假设为 {v} 元", v=fmt(D["每股价值"])),
+                     delta_color="off", border=True)
+    else:
+        kk[0].metric(T("每股内在价值（元）"), fmt(D["每股价值"]), T("{p:+.1%} vs 现价", p=D["每股价值"] / q["price"] - 1),
+                     delta_color="off", border=True)
     kk[1].metric(T("蒙特卡洛 90% 区间（元）"), f"{ps_pct['P5']:.1f} – {ps_pct['P95']:.1f}", border=True)
     kk[2].metric(T("价值高于现价的概率"), f"{p_above:.1%}", border=True)
     kk[3].metric(T("现价隐含折现率"), f"{iw:.2f}%" if iw == iw else "—", T("模型 {w:.2f}%", w=W),
@@ -1187,6 +1235,8 @@ with tabs[1]:
               (T("VERDICT_4", iw=iw, w=W) if iw == iw else T("VERDICT_4N")),
               T("VERDICT_5", y=fc["年份"].iloc[0], pe=mx(mult.iloc[3]["折现法隐含"]), pem=mx(mult.iloc[3]["按现价"]),
                 tv=mx(D["终值隐含EV/EBITDA"]))]
+    if NEG:                             # 估值为负：前两条换成原因说明，其余照常
+        lines_[:2] = [T("VERDICT_NEG", name=q["name"], v=D["每股价值"]), T("VERDICT_NEG_" + VSTAT, n=A.years)]
     if n_ovr:
         lines_.append(T("其中 {n} 个逐年假设为手动修改（见上方黄底单元格）。", n=n_ovr))
     st.markdown("<div class='verdict'>" + "<br>".join("· " + x for x in lines_) + "</div>", unsafe_allow_html=True)

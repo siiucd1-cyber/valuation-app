@@ -70,6 +70,32 @@ def tr_msg(s: str) -> str:
 
 
 ZH = {
+    "YEARS_HELP": ("显式预测期的年数。默认 5 年；扩张期或尚未盈利的公司，5 年往往只覆盖投入期，"
+                   "可拉长到 7 或 10 年，让公司在预测期内进入稳定状态。首末年之间的假设按线性过渡。"),
+    "NEG_TITLE": "**折现法结果为负（每股 {v:.2f} 元），不作为估值结论。** 实务中不会出具负的估值，负数说明模型设定与公司情况不匹配，需要按原因处理：",
+    "NEG_ty_neg": ("**原因：终值年仍在亏损或净流出现金**（终值年自由现金流 {f} 万元）。这相当于假设公司永远亏下去，"
+                   "假设之间自相矛盾，并不是公司真的值负数。\n\n"
+                   "**实务处理**：① 把左侧「第{n}年核心经营利润率」设为成熟期能达到的水平（可参考同行）{ext}；"
+                   "② 尚未商业化的公司（如创新药）一般不用 DCF，而用风险调整后的现金流折现（rNPV）"
+                   "或最近一轮融资估值。"),
+    "NEG_ev_neg": ("**原因：预测期投入超过了终值。** 终值本身为正（{tv} 万元），但 {n} 年预测期内的累计投入过大，"
+                   "企业价值为 {ev} 万元。常见于扩张期或亏损的成长公司：预测期只覆盖了投入期，没有覆盖回报期。\n\n"
+                   "**实务处理**：{ext2}检查资本开支是否在合理时间内回落、利润率是否逐步改善。"),
+    "NEG_eq_neg": ("**原因：企业价值不足以覆盖净负债。** 业务本身的价值为正（企业价值 {ev} 万元），但净负债 {nd} 万元更高，"
+                   "扣除后股权价值为负。\n\n"
+                   "**实务处理**：股东只承担有限责任，股权价值下限为 0。重组估值中会表述为「股权已资不抵债，价值落在债权人」；"
+                   "若仍需给股权定价，通常按期权法（把股权视为以负债为行权价的看涨期权）或清算价值评估。"),
+    "NEG_EXT": "，必要时把预测期拉长到 10 年，给公司留出扭亏的时间",
+    "NEG_EXT2": "把预测期拉长到 10 年，直到公司进入稳定状态；同时",
+    "NEG_EXT2_10": "预测期已是 10 年仍为负，说明投入的回收期更长：",
+    "MULT_NEG": "折现法结果为负，隐含倍数没有意义（显示 n.m.）；按现价的倍数在利润或 EBITDA 为负时同样显示 n.m.。",
+    "NEG_BOOK": "**资产法参考**：每股净资产 {b} 元（现价对应市净率 {pb}），已加入下方「估值区间汇总」。",
+    "RESULT_NEG": ("- **折现法**：折现率 {w:.2f}%（股权成本 {ke:.2f}%，贝塔 {b:.2f}），永续增长率 {g:.2f}%，"
+                   "按当前假设每股价值为 {v:.2f} 元。结果为负，不作为估值结论，原因与处理方法见页面上方说明。"),
+    "VERDICT_NEG": "按当前假设，{name}的折现法每股价值为 {v:.2f} 元。结果为负，不作为估值结论。",
+    "VERDICT_NEG_ty_neg": "原因：终值年仍在亏损，相当于假设公司永远亏下去；应先把末年利润率设为成熟期水平，必要时拉长预测期。",
+    "VERDICT_NEG_ev_neg": "原因：{n} 年预测期内的投入超过了终值；应拉长预测期，直到公司进入稳定状态。",
+    "VERDICT_NEG_eq_neg": "原因：企业价值不足以覆盖净负债；股权价值下限为 0，困境企业通常用期权法或清算价值评估。",
     "STUB_NOTE": "估值基准日 {d}（最新报表日）：第 1 个预测年只计入基准日之后的部分（年报为 1，半年报为 0.5）",
     "NO_REVENUE": "{y} 年营业收入为 0：本工具的折现法以营收增速和利润率驱动，不适用于尚未产生收入的公司（如未商业化的创新药企），"
                   "这类公司通常按研发管线里程碑或最近一轮融资估值。",
@@ -100,9 +126,9 @@ ZH = {
     "VERDICT_NOTE": "结论完全由上方假设推出，改动任一假设都会即时更新；仅供学习研究，不构成投资建议。",
     "FCFF_NEG": ("终值年自由现金流为负，终值也随之为负，折现法结果没有意义。终值年代表公司进入稳定状态，"
                  "资本开支一般回落到维持性水平：当前终值年资本开支 / 营收为 {cx:.1f}%，折旧摊销 / 营收为 {da:.1f}%。"
-                 "可在左侧「资本开支与营运资金」中调低「第5年及终值年资本开支 / 营收」；若终值年利润为负，则需要先调整利润率假设。"),
+                 "可在左侧「资本开支与营运资金」中调低「第{n}年及终值年资本开支 / 营收」；若终值年利润为负，则需要先调整利润率假设。"),
     "CAPEX_TY_HELP": ("扩张期的资本开支不会永远持续，稳定状态下一般回落到维持性水平，约等于折旧摊销。"
-                      "预测期资本开支 / 营收从第 1 年的取值线性过渡到这里的取值，第 5 年与终值年按此计算。"
+                      "预测期资本开支 / 营收从第 1 年的取值线性过渡到这里的取值，第 {n} 年与终值年按此计算。"
                       "默认取折旧摊销 / 营收（{da}%）；若永续增长仍需较多投入，可略高于折旧。"),
     "MID_HELP": ("年中折现：假设现金流在一年中均匀流入，按各期中点折现，是估值报告的通行做法；不勾选则按期末折现，结果偏保守。"
                  "终值同样按最后一个预测年的中点折现。"),
@@ -143,7 +169,7 @@ ZH = {
     "MC_EXPLAIN": (
         "**它不是用来“预测营收”的。** 营收增速和利润率的**中枢**仍是左侧你设定的假设；"
         "蒙特卡洛回答的是另一个问题：**这些假设如果像历史上那样上下波动，估值会落在什么区间？**\n\n"
-        "做法：每一次模拟，为未来 5 年逐年随机抽一组（营收增速、核心经营利润率），"
+        "做法：每一次模拟，为预测期内逐年随机抽一组（营收增速、核心经营利润率），"
         "波动幅度（标准差）和两者的联动关系（相关系数）取自公司历史；然后把这条路径完整地走一遍"
         "折现法，得到一个每股价值。重复 2 万次，就得到每股价值的分布——P50 是中位数，P5–P95 覆盖 90% 的情形。\n\n"
         "**为什么要用历史数据估参数：** 标准差和相关系数如果凭感觉填，结论就没有依据。"
@@ -167,7 +193,7 @@ ZH = {
                     "用于剔除闲置资金对回报率的稀释。"),
     "FCFF_NOTE": ("NOPAT =（核心经营利润 + 投资收益及其他 × 计入比例）×（1 − 税率）；"
                   "FCFF = NOPAT + 折旧摊销 − 资本开支 − 营运资金增加。第 1 年只计入估值基准日之后的部分；"
-                  "默认年中折现。资本开支 / 营收从第 1 年线性过渡到第 5 年的稳定水平；终值年 = 第 5 年按永续增长率外推一年，"
+                  "默认年中折现。资本开支 / 营收从第 1 年线性过渡到预测末年的稳定水平；终值年 = 预测末年按永续增长率外推一年，"
                   "营运资金按永续增速计算。"),
     "IW_HELP": ("反向折现：其他假设不变，求使折现法每股价值恰好等于现价的折现率。"
                 "它比模型折现率低得越多，说明市场定价隐含的风险越低或长期增长越高。"),
@@ -181,13 +207,55 @@ ZH = {
         "- **贝塔**：最近 100 周个股与沪深300 周收益率回归。\n"
         "- **蒙特卡洛**：均值取用户假设；标准差与相关系数可选单季滚动 TTM、年度同比或手动输入。\n"
         "- **折现时点**：估值基准日取最新报表日（与净现金同一时点），第 1 年只计入基准日之后的现金流；默认年中折现。\n"
-        "- **资本开支与终值**：资本开支 / 营收从第 1 年线性过渡到稳定水平（第 5 年，默认等于折旧摊销）；"
-        "终值年 = 第 5 年按永续增长率外推一年，营运资金按永续增速计算；终值 = 终值年 FCFF ÷（WACC − g）。\n"
+        "- **资本开支与终值**：资本开支 / 营收从第 1 年线性过渡到稳定水平（预测末年，默认等于折旧摊销）；"
+        "终值年 = 预测末年按永续增长率外推一年，营运资金按永续增速计算；终值 = 终值年 FCFF ÷（WACC − g）。\n"
+        "- **预测期**：默认 5 年，可选 7 或 10 年；扩张期、尚未盈利的公司应拉长到进入稳定状态为止。\n"
+        "- **估值为负**：不作为结论，页面按原因（终值年仍亏损 / 预测期投入超过终值 / 企业价值不足以覆盖净负债）给出实务处理方法，"
+        "并以每股净资产作资产法参考。\n"
         "- **交叉检验**：折现法结果换算成 EV/EBITDA 与市盈率，与现价对应的倍数并列；计算表顶部列出模型检查结果。\n"
         "- 本工具为个人学习项目，所有结论基于用户假设，不构成投资建议。"),
 }
 
 EN = {
+    "为负时不作为估值结论，需按原因调整假设或改用其他方法": "A negative value is not a conclusion; fix the cause or use another method",
+    "资本开支 / 营收从第 1 年线性过渡到稳定水平（预测末年）；「终值年」= 预测末年按永续增长率外推一年，营运资金按永续增速计算；终值 = 终值年 FCFF ÷ (WACC − g)。":
+        "Capex / revenue moves linearly from year 1 to a steady-state level by the final forecast year; the terminal year extends it by one year at terminal growth, with working capital at terminal growth; TV = terminal-year FCFF ÷ (WACC − g).",
+    "YEARS_HELP": ("Length of the explicit forecast. Default 5 years; for expansion-phase or loss-making companies 5 years often "
+                   "covers only the investment phase, so extend to 7 or 10 years to reach a steady state. Assumptions move "
+                   "linearly between the first and final years."),
+    "预测期（年）": "Forecast period (years)", "不适用": "n.m.",
+    "按当前假设为 {v} 元，见下方说明": "RMB {v} on current assumptions; see below",
+    "按当前假设为 {v} 元": "RMB {v} on current assumptions",
+    "改用 10 年预测期": "Switch to a 10-year forecast",
+    "折现法结果为负，未在图中标出": "DCF is negative and not shown",
+    "每股净资产（资产法参考）": "Book value per share (asset approach)",
+    "股权价值为正": "Equity value positive", "每股 {v} 元": "RMB {v} per share",
+    "NEG_TITLE": "**The DCF is negative (RMB {v:.2f} per share) and is not a valuation conclusion.** Valuations are never reported as negative; a negative result means the model set-up does not fit the company. Handle it by cause:",
+    "NEG_ty_neg": ("**Cause: the terminal year is still loss-making or burning cash** (terminal-year FCFF {f}, RMB 10k). That "
+                   "assumes the company loses money forever, which is internally inconsistent rather than a negative value.\n\n"
+                   "**In practice**: (1) set “Year-{n} core operating margin” on the left to a mature level (peers are a guide)"
+                   "{ext}; (2) pre-commercial "
+                   "companies (e.g. biotech) are usually valued on risk-adjusted NPV (rNPV) or the latest funding round, not DCF."),
+    "NEG_ev_neg": ("**Cause: forecast-period investment exceeds the terminal value.** The terminal value is positive (RMB {tv}, 10k), "
+                   "but cumulative investment over the {n}-year forecast makes enterprise value RMB {ev} (10k). Typical of "
+                   "expansion-phase or loss-making growth companies: the forecast covers the investment phase but not the payback.\n\n"
+                   "**In practice**: {ext2}check that capex falls back in a reasonable time and margins improve."),
+    "NEG_eq_neg": ("**Cause: enterprise value does not cover net debt.** The business itself is worth something (EV RMB {ev}, 10k) "
+                   "but net debt of RMB {nd} (10k) is larger, so equity value is negative.\n\n"
+                   "**In practice**: shareholders have limited liability, so equity cannot be worth less than zero. Restructuring "
+                   "valuations say the equity is out of the money and value breaks in the debt; if equity still needs a price, "
+                   "it is usually valued as an option (a call on the assets struck at the debt) or on liquidation value."),
+    "NEG_EXT": " and extend the forecast to 10 years if needed to give the company time to turn profitable",
+    "NEG_EXT2": "extend the forecast to 10 years so it reaches a steady state, and ",
+    "NEG_EXT2_10": "it is still negative over 10 years, so the payback is longer still: ",
+    "MULT_NEG": "The DCF is negative, so implied multiples are not meaningful (n.m.); multiples at the current price are also n.m. when profit or EBITDA is negative.",
+    "NEG_BOOK": "**Asset-approach reference**: book value per share RMB {b} (current P/B {pb}), added to the valuation summary below.",
+    "RESULT_NEG": ("- **DCF**: discount rate {w:.2f}% (cost of equity {ke:.2f}%, beta {b:.2f}), terminal growth {g:.2f}%; value per "
+                   "share is RMB {v:.2f} on current assumptions. It is negative and not a valuation conclusion; see the note at the top."),
+    "VERDICT_NEG": "On the current assumptions, {name}'s DCF value is RMB {v:.2f} per share. It is negative and not a valuation conclusion.",
+    "VERDICT_NEG_ty_neg": "Cause: the terminal year is still loss-making, i.e. losses forever; set the final-year margin to a mature level and extend the forecast if needed.",
+    "VERDICT_NEG_ev_neg": "Cause: investment over the {n}-year forecast exceeds the terminal value; extend the forecast until the company reaches a steady state.",
+    "VERDICT_NEG_eq_neg": "Cause: enterprise value does not cover net debt; equity is floored at zero, and distressed equity is usually valued as an option or on liquidation value.",
     "营收增速、利润率、投资收益、折旧摊销与资本开支为逐年假设，见「预测与折现法」表蓝色行":
         "Revenue growth, margins, investment income, D&A and capex are yearly assumptions: see the blue rows on the Forecast & DCF sheet",
     "STUB_NOTE": "Valuation date {d} (latest balance sheet): year 1 counts only the part after it (1 for an annual report, 0.5 for interims)",
@@ -237,9 +305,9 @@ EN = {
     "恢复数据默认值": "Reset to data-driven defaults",
     "收入与利润": "Revenue & profit",
     "第1年营收增速（%）": "Year-1 revenue growth (%)",
-    "第5年营收增速（%）": "Year-5 revenue growth (%)",
+    "第{n}年营收增速（%）": "Year-{n} revenue growth (%)",
     "第1年核心经营利润率（%）": "Year-1 core operating margin (%)",
-    "第5年核心经营利润率（%）": "Year-5 core operating margin (%)",
+    "第{n}年核心经营利润率（%）": "Year-{n} core operating margin (%)",
     "第1年投资收益及其他（万元）": "Year-1 investment income & other (RMB 10k)",
     "投资收益及其他年变化（%）": "Annual change in investment income & other (%)",
     "其中计入经营现金流的比例（%）": "Share counted in operating cash flow (%)",
@@ -435,8 +503,8 @@ EN = {
     "FCFF_NOTE": ("NOPAT = (core operating profit + investment income & other × share counted) × (1 − tax); "
                   "FCFF = NOPAT + D&A − capex − increase in working capital. Year 1 counts only the part after the valuation "
                   "date; mid-year convention by default. Capex / revenue moves linearly from year 1 to a steady-state level "
-                  "by year 5; the terminal year extends year 5 by one year at terminal growth, with working capital at "
-                  "terminal growth."),
+                  "by the final forecast year; the terminal year extends it by one year at terminal growth, with working "
+                  "capital at terminal growth."),
     "敏感性：每股价值（元）": "Sensitivity: value per share (RMB)",
 
     # ── 市盈率法
@@ -475,7 +543,7 @@ EN = {
         "**It does not forecast revenue.** The central path for revenue growth and margin is still the assumptions "
         "you set on the left. The simulation answers a different question: **if those assumptions move around the way "
         "they have historically, where does the valuation land?**\n\n"
-        "Each run draws a revenue growth rate and a core operating margin for each of the next five years. The size of "
+        "Each run draws a revenue growth rate and a core operating margin for each forecast year. The size of "
         "the swings (standard deviation) and how the two move together (correlation) come from the company's history. "
         "The whole path is then run through the DCF to get one value per share. After 20,000 runs you have a "
         "distribution: P50 is the median and P5–P95 covers 90% of outcomes.\n\n"
@@ -567,9 +635,14 @@ EN = {
         "annual YoY or manual input.\n"
         "- **Timing**: the valuation date is the latest balance-sheet date (the same date as net cash); year 1 counts only "
         "cash flow after it; mid-year convention by default.\n"
-        "- **Capex and terminal value**: capex / revenue moves linearly from year 1 to a steady-state level by year 5 (D&A by "
-        "default); the terminal year extends year 5 by one year at terminal growth, with working capital at terminal growth; "
-        "TV = terminal-year FCFF ÷ (WACC − g).\n"
+        "- **Capex and terminal value**: capex / revenue moves linearly from year 1 to a steady-state level by the final "
+        "forecast year (D&A by default); the terminal year extends it by one year at terminal growth, with working capital at "
+        "terminal growth; TV = terminal-year FCFF ÷ (WACC − g).\n"
+        "- **Forecast period**: 5 years by default, 7 or 10 optional; expansion-phase and loss-making companies should be "
+        "forecast until they reach a steady state.\n"
+        "- **Negative values**: not reported as a conclusion; the page explains the cause (terminal year still loss-making / "
+        "forecast investment exceeds the terminal value / EV below net debt) and the practical fix, with book value per share "
+        "as an asset-approach reference.\n"
         "- **Cross-checks**: the DCF result is expressed as EV/EBITDA and P/E next to the multiples at the current price; "
         "model checks are listed at the top of the Model tab.\n"
         "- A personal study project. All conclusions depend on user assumptions and are not investment advice."),
@@ -590,8 +663,8 @@ EN = {
     "模拟结果：每股价值的分布": "Simulation result: distribution of value per share",
     "每股价值高于现价的概率：{b:.1%}；{y1}年归母净利润低于{y0}年实际值的概率：{a:.1%}。":
         "Probability that value per share exceeds the price: {b:.1%}; probability that {y1}E net profit falls below FY{y0}: {a:.1%}.",
-    "每次模拟同时随机抽取：未来5年的营收增速与核心经营利润率（按上方相关系数联动），以及折现率、永续增长率。均值取左侧假设；第1年已披露 {nq} 个季度，增速波动按剩余 {rest:.0%} 缩小；远期波动逐年放大。":
-        "Each run draws five years of revenue growth and core margin (linked by the correlation above) plus the discount rate and terminal growth. Means follow the assumptions on the left; {nq} quarter(s) of year 1 are reported, so year-1 growth volatility is scaled to the remaining {rest:.0%}; volatility widens in later years.",
+    "每次模拟同时随机抽取：预测期各年的营收增速与核心经营利润率（按上方相关系数联动），以及折现率、永续增长率。均值取左侧假设；第1年已披露 {nq} 个季度，增速波动按剩余 {rest:.0%} 缩小；远期波动逐年放大。":
+        "Each run draws revenue growth and core margin for every forecast year (linked by the correlation above) plus the discount rate and terminal growth. Means follow the assumptions on the left; {nq} quarter(s) of year 1 are reported, so year-1 growth volatility is scaled to the remaining {rest:.0%}; volatility widens in later years.",
     "哪些假设最影响估值": "Which assumptions matter most",
     "单因素敏感性（元/股）": "One-at-a-time sensitivity (RMB/share)",
     "不利方向": "Adverse", "有利方向": "Favourable",
@@ -621,8 +694,8 @@ EN = {
     "贝塔调为 1.0（市场平均风险）": "Beta to 1.0 (market-average risk)",
     "去掉规模溢价": "Remove size premium",
     "投资收益全部计入现金流、不再下降": "Count all investment income as cash flow, no decline",
-    "第5年营收增速 +10pp": "Year-5 revenue growth +10 pp",
-    "第5年核心经营利润率 +5pp": "Year-5 core margin +5 pp",
+    "预测末年营收增速 +10pp": "Final-year revenue growth +10 pp",
+    "预测末年核心经营利润率 +5pp": "Final-year core margin +5 pp",
     "永续增长率 +1pp": "Terminal growth +1 pp",
     "只调一个参数时，要达到现价需要：": "Changing one parameter only, reaching the price requires:",
     "参数": "Parameter", "当前": "Current", "达到现价所需": "Needed to reach price", "无解": "No solution",
@@ -691,10 +764,10 @@ EN = {
     "FCFF_NEG": ("Terminal-year free cash flow is negative, so the terminal value is negative too and the DCF is not "
                  "meaningful. The terminal year represents a steady state in which capex normally falls back to a "
                  "maintenance level: terminal capex / revenue is {cx:.1f}% and D&A / revenue is {da:.1f}%. Lower "
-                 "“Year-5 & terminal capex / revenue” under “Capex & working capital” on the left; if terminal-year profit is "
+                 "“Year-{n} & terminal capex / revenue” under “Capex & working capital” on the left; if terminal-year profit is "
                  "negative, revisit the margin assumptions first."),
     "CAPEX_TY_HELP": ("Expansion capex does not last forever; in steady state it usually falls back to a maintenance level close "
-                      "to D&A. Capex / revenue moves linearly from the year-1 value to this value, which applies to year 5 and the "
+                      "to D&A. Capex / revenue moves linearly from the year-1 value to this value, which applies to year {n} and the "
                       "terminal year. Defaults to D&A / revenue ({da}%); set it a little higher if perpetual growth still needs "
                       "investment."),
     "MID_HELP": ("Mid-year convention: cash flows arrive evenly through the year and are discounted from the middle of each "
@@ -710,7 +783,7 @@ EN = {
                   "denominator is negative. A terminal multiple far above peers means perpetual growth or terminal-year "
                   "profit is too optimistic."),
     "VERDICT_5": "Cross-check: the DCF implies a {y} P/E of {pe} (current price: {pem}); the terminal value is {tv} terminal-year EBITDA.",
-    "第5年及终值年资本开支 / 营收（%）": "Year-5 & terminal capex / revenue (%)",
+    "第{n}年及终值年资本开支 / 营收（%）": "Year-{n} & terminal capex / revenue (%)",
     "第1年资本开支 / 营收（%）": "Year-1 capex / revenue (%)",
     "稳定状态的维持性资本开支，默认等于折旧摊销 / 营收；预测期从第 1 年线性过渡到此值":
         "Steady-state maintenance capex, D&A / revenue by default; the forecast moves linearly from year 1 to this value",
