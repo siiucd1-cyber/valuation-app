@@ -15,6 +15,7 @@ import json
 import os
 import re
 import threading
+import time
 import warnings
 
 import numpy as np
@@ -35,14 +36,17 @@ WAN = 1e4
 _AK_LOCK = threading.Lock()
 
 
-def retry(fn, tries: int = 3, wait: float = 1.5, timeout: float = 45):
+def retry(fn, tries: int = 3, wait: float = 1.5, timeout: float = 45, lock: bool = True):
     """东方财富接口对连续请求会限流，失败后退避重试。
     akshare 内部请求不设超时，接口无响应时会一直挂起，所以每次调用放进独立线程并限时。
-    所有调用经同一把锁串行执行：新浪接口依赖的 JS 引擎（mini_racer）被两个线程同时初始化会使整个进程崩溃。"""
+    akshare 调用经同一把锁串行执行：新浪接口依赖的 JS 引擎（mini_racer）被两个线程同时初始化会使整个进程崩溃。
+    直接的 HTTP 请求（自带超时）传 lock=False：不必排队，也不会被超时后仍在运行的 akshare 线程占住锁而卡住。"""
     import time
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FTimeout
 
     def locked():
+        if not lock:
+            return fn()
         if not _AK_LOCK.acquire(timeout=timeout):
             raise RuntimeError("接口繁忙，请稍后重试")
         try:
@@ -113,7 +117,7 @@ def fetch_quote(code: str) -> dict:
          "fields": "f43,f57,f58,f84,f116,f127,f167,f170"}
     try:
         j = retry(lambda: requests.get(QUOTE_URL, params=p, headers=UA, timeout=10).json()["data"],
-                  tries=2, timeout=12)
+                  tries=2, timeout=12, lock=False)
         if not j or j.get("f58") in (None, "-"):
             raise RuntimeError("行情接口未返回该代码的数据")
         return {"code": j["f57"], "name": j["f58"], "price": float(j["f43"]),
@@ -133,7 +137,7 @@ def fetch_quote_tencent(code: str) -> dict:
         r = requests.get("https://qt.gtimg.cn/q=" + f"{pre.lower()}{code}", headers=UA, timeout=10)
         r.encoding = "gbk"
         return r.text
-    txt = retry(get, tries=2, timeout=12)
+    txt = retry(get, tries=2, timeout=12, lock=False)
     if '"' not in txt or len(txt.split('"')[1].split("~")) < 74:
         raise RuntimeError("行情接口未返回该代码的数据")
     f = txt.split('"')[1].split("~")
@@ -156,28 +160,67 @@ def company_type(sym: str) -> str | None:
         m = re.search(r'id="hidctype"[^>]*value="(\d+)"', r.text)
         return m.group(1) if m else None
     try:
-        return retry(get, tries=2, timeout=15)
+        return retry(get, tries=2, timeout=15, lock=False)
     except Exception:  # noqa: BLE001
         return None
 
 
+EM_F10 = "https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/"
+EM_SHEETS = {"pl": "lrb", "bs": "zcfzb", "cf": "xjllb"}     # 利润表、资产负债表、现金流量表
+N_REPORTS = 48          # 只取最近 48 期报告（约 12 年），够用且请求数固定，不随上市年限增加
+
+
+def _get_json(url: str, params: dict, tries: int = 4, timeout: float = 20) -> dict:
+    """单个请求带超时与重试（东方财富接口偶尔很慢或断开）。"""
+    last = None
+    for i in range(tries):
+        try:
+            return requests.get(url, params=params, headers=UA, timeout=timeout).json()
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(1.5 * (i + 1))
+    raise RuntimeError(f"东方财富报表接口无响应：{type(last).__name__}")
+
+
+def _em_dates(sym: str, ctype: str, kind: str) -> list[str]:
+    base = {"companyType": ctype, "reportDateType": "0", "code": sym}
+    dates = (_get_json(EM_F10 + f"{kind}DateAjaxNew", base).get("data") or [])
+    return sorted({str(d["REPORT_DATE"])[:10] for d in dates if d.get("REPORT_DATE")}, reverse=True)[:N_REPORTS]
+
+
+def _em_sheets(sym: str, ctype: str) -> dict[str, pd.DataFrame]:
+    """东方财富 F10 三张报表（与 akshare 的 stock_*_sheet_by_report_em 同一接口），只取最近 N_REPORTS 期。
+    每页 5 期，三张表的各页并发请求（最多 2 个同时，再多会被东方财富断开），单个请求失败自动重试。"""
+    from concurrent.futures import ThreadPoolExecutor
+    base = {"companyType": ctype, "reportDateType": "0", "code": sym}
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        dates = dict(zip(EM_SHEETS, ex.map(lambda kind: _em_dates(sym, ctype, kind), EM_SHEETS.values())))
+    jobs = [(k, ",".join(ds[i:i + 5])) for k, ds in dates.items() for i in range(0, len(ds), 5)]
+    fetch = lambda job: _get_json(EM_F10 + f"{EM_SHEETS[job[0]]}AjaxNew", {**base, "reportType": "1", "dates": job[1]})
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        pages = list(ex.map(fetch, jobs))
+    out = {}
+    for k in EM_SHEETS:
+        frames = [pd.DataFrame(j["data"]) for (k_, _), j in zip(jobs, pages) if k_ == k and j.get("data")]
+        out[k] = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return out
+
+
 def fetch_statements(code: str) -> dict[str, pd.DataFrame]:
-    import akshare as ak
     pre, _ = market_of(code)
     sym = f"{pre}{code}"
     ct = company_type(sym)
     if ct in FIN_TYPES:
         raise Unsupported(f"{code} 属于{FIN_TYPES[ct]}。金融企业的收入来自利息、手续费或保费，没有一般意义上的"
                           "资本开支和营运资金，自由现金流折现法不适用，本工具暂不支持（这类公司通常用市净率或股利折现估值）")
-    out = {
-        "pl": retry(lambda: ak.stock_profit_sheet_by_report_em(symbol=sym)),
-        "bs": retry(lambda: ak.stock_balance_sheet_by_report_em(symbol=sym)),
-        "cf": retry(lambda: ak.stock_cash_flow_sheet_by_report_em(symbol=sym)),
-    }
+    out = _em_sheets(sym, ct or "4")
     for k, df in out.items():
         if df is None or df.empty or "REPORT_DATE" not in df.columns:
             raise Unsupported(f"东方财富没有 {code} 的财务报表，请确认代码是否正确")
         df["REPORT_DATE"] = pd.to_datetime(df["REPORT_DATE"])
+        for c in df.columns:              # 与 akshare 一致：整列为空的科目转成数值列
+            if df[c].isna().all():
+                df[c] = pd.to_numeric(df[c], errors="coerce")
     if "TOTAL_OPERATE_INCOME" not in out["pl"].columns:
         raise Unsupported(f"{code} 的利润表没有营业总收入科目（多见于金融企业），本工具暂不支持")
     return out
@@ -197,11 +240,13 @@ def fetch_kline_tencent(symbol: str, start: str, adjust: str = "qfq") -> pd.Seri
     单次最多返回约 2000 条，这里按需一次取完。"""
     s0 = pd.Timestamp(start).strftime("%Y-%m-%d")
     p = {"param": f"{symbol},day,{s0},{dt.date.today():%Y-%m-%d},2000,{adjust}"}
-    j = retry(lambda: requests.get(TENCENT_KLINE, params=p, headers=UA, timeout=10).json(), tries=2, timeout=15)
+    j = retry(lambda: requests.get(TENCENT_KLINE, params=p, headers=UA, timeout=10).json(), tries=2, timeout=15,
+              lock=False)
     node = (j.get("data") or {}).get(symbol) or {}
     rows = node.get(f"{adjust}day") or node.get("day") or []
     if len(rows) < 30:   # 北交所代码在这个接口只返回最新一天，改用 newfqkline（按结束日往前取最多 800 条）
-        j = retry(lambda: requests.get(TENCENT_KLINE2, params=p, headers=UA, timeout=10).json(), tries=2, timeout=15)
+        j = retry(lambda: requests.get(TENCENT_KLINE2, params=p, headers=UA, timeout=10).json(), tries=2, timeout=15,
+                  lock=False)
         node = (j.get("data") or {}).get(symbol) or {}
         rows = node.get(f"{adjust}day") or node.get("day") or rows
     if not rows:
@@ -211,20 +256,20 @@ def fetch_kline_tencent(symbol: str, start: str, adjust: str = "qfq") -> pd.Seri
 
 
 def fetch_prices(code: str, years: int = 3) -> pd.Series:
-    """个股前复权收盘价：东方财富 → 腾讯 → 新浪。
-    东方财富 K 线接口（push2his）拒绝境外 IP（包括 Streamlit Cloud 的美国服务器），此时由腾讯接口补上；
-    新浪需 JS 引擎解码，放在最后。"""
+    """个股前复权收盘价：腾讯 → 东方财富 → 新浪。
+    腾讯接口境内外都能访问、自带超时，放在最前；东方财富 K 线接口（push2his）拒绝境外 IP，
+    新浪需 JS 引擎解码，作为后备。"""
     import akshare as ak
     start = (dt.date.today() - dt.timedelta(days=365 * years)).strftime("%Y%m%d")
     pre, _ = market_of(code)
     try:
-        df = retry(lambda: ak.stock_zh_a_hist(symbol=code, period="daily",
-                                              start_date=start, adjust="qfq"), tries=1, timeout=12)
-        return _tag(df.assign(d=pd.to_datetime(df["日期"])).set_index("d")["收盘"].astype(float), "东方财富")
+        return _tag(fetch_kline_tencent(f"{pre.lower()}{code}", start), "腾讯")
     except Exception:  # noqa: BLE001
         pass
     try:
-        return _tag(fetch_kline_tencent(f"{pre.lower()}{code}", start), "腾讯")
+        df = retry(lambda: ak.stock_zh_a_hist(symbol=code, period="daily",
+                                              start_date=start, adjust="qfq"), tries=1, timeout=12)
+        return _tag(df.assign(d=pd.to_datetime(df["日期"])).set_index("d")["收盘"].astype(float), "东方财富")
     except Exception:  # noqa: BLE001
         df = retry(lambda: ak.stock_zh_a_daily(symbol=f"{pre.lower()}{code}", adjust="qfq"))
         s = df.assign(d=pd.to_datetime(df["date"])).set_index("d")["close"].astype(float)
@@ -232,17 +277,17 @@ def fetch_prices(code: str, years: int = 3) -> pd.Series:
 
 
 def fetch_index() -> pd.Series:
-    """沪深300 日线：东方财富 → 腾讯 → 新浪（同上）。"""
+    """沪深300 日线：腾讯 → 东方财富 → 新浪（同上）。"""
     import akshare as ak
     start = (dt.date.today() - dt.timedelta(days=365 * 3)).strftime("%Y%m%d")
+    try:
+        return _tag(fetch_kline_tencent("sh000300", start, adjust=""), "腾讯")
+    except Exception:  # noqa: BLE001
+        pass
     try:
         df = retry(lambda: ak.index_zh_a_hist(symbol="000300", period="daily", start_date=start,
                                                end_date=dt.date.today().strftime("%Y%m%d")), tries=1, timeout=12)
         return _tag(df.assign(d=pd.to_datetime(df["日期"])).set_index("d")["收盘"].astype(float), "东方财富")
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        return _tag(fetch_kline_tencent("sh000300", start, adjust=""), "腾讯")
     except Exception:  # noqa: BLE001
         df = retry(lambda: ak.stock_zh_index_daily(symbol="sh000300"))
         s = df.assign(d=pd.to_datetime(df["date"])).set_index("d")["close"].astype(float)
@@ -276,6 +321,8 @@ def build_annual(st: dict[str, pd.DataFrame], n_years: int = 6) -> pd.DataFrame:
     out["净利润"] = g("NETPROFIT")
     out["归母净利润"] = g("PARENT_NETPROFIT")
     out["扣非归母净利润"] = g("DEDUCT_PARENT_NETPROFIT")
+    out["其他收益"] = g("OTHER_INCOME")          # 政府补助、增值税即征即退等，多为经常性的经营收益
+    out["投资收益"] = g("INVEST_INCOME")
 
     def at_year_end(df: pd.DataFrame, cols: dict) -> pd.DataFrame:
         d = df[df["REPORT_DATE"].dt.month == 12].copy()
@@ -290,7 +337,7 @@ def build_annual(st: dict[str, pd.DataFrame], n_years: int = 6) -> pd.DataFrame:
     b = at_year_end(bs, {
         "货币资金": "MONETARYFUNDS",
         "交易性金融资产": ["TRADE_FINASSET_NOTFVTPL", "TRADE_FINASSET"],
-        "资产总计": "TOTAL_ASSETS", "归母权益": "TOTAL_PARENT_EQUITY",
+        "资产总计": "TOTAL_ASSETS", "归母权益": "TOTAL_PARENT_EQUITY", "长期股权投资": "LONG_EQUITY_INVEST",
         "固定资产": "FIXED_ASSET", "应收账款": "ACCOUNTS_RECE", "存货": "INVENTORY",
         "应付账款": "ACCOUNTS_PAYABLE",
         "短期借款": "SHORT_LOAN", "长期借款": "LONG_LOAN", "应付债券": "BOND_PAYABLE",
@@ -347,7 +394,7 @@ def build_latest_bs(st: dict[str, pd.DataFrame]) -> dict:
     return {"报告期": r["REPORT_DATE"].iloc[0].strftime("%Y-%m-%d"),
             "货币资金": f("MONETARYFUNDS"),
             "交易性金融资产": f("TRADE_FINASSET_NOTFVTPL", "TRADE_FINASSET"),
-            "有息负债": debt, "资产总计": f("TOTAL_ASSETS"),
+            "有息负债": debt, "资产总计": f("TOTAL_ASSETS"), "长期股权投资": f("LONG_EQUITY_INVEST"),
             "归母权益": f("TOTAL_PARENT_EQUITY")}
 
 

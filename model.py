@@ -42,6 +42,7 @@ class Assumptions:
     # 净现金口径
     add_cash: bool = True
     add_fin: bool = True
+    add_lte: bool = True           # 长期股权投资（联营、合营企业）按账面计入：其投资收益不在自由现金流里
     # 分红率：只用于预测资产负债表（净现金、权益的滚动），不影响折现法
     payout: float = 30.0
     # 折现时点：估值基准日 = 最新报表日；stub = 第 1 个预测年在基准日之后的比例（年报为 1，半年报为 0.5）
@@ -139,10 +140,14 @@ def terminal_year(fc: pd.DataFrame, g_term: float) -> dict:
 
 
 def net_cash(bs: dict, a: Assumptions) -> dict:
+    """企业价值到股权价值的调整项：加货币资金、交易性金融资产、长期股权投资（非经营资产），减有息负债。
+    为简洁起见合称「净现金」。"""
     cash = bs.get("货币资金", 0.0) if a.add_cash else 0.0
     fin = bs.get("交易性金融资产", 0.0) if a.add_fin else 0.0
+    lte = (bs.get("长期股权投资", 0.0) or 0.0) if a.add_lte else 0.0
     debt = bs.get("有息负债", 0.0)
-    return {"货币资金": cash, "交易性金融资产": fin, "有息负债": debt, "净现金": cash + fin - debt}
+    return {"货币资金": cash, "交易性金融资产": fin, "长期股权投资": lte, "有息负债": debt,
+            "净现金": cash + fin + lte - debt}
 
 
 def dcf(fc: pd.DataFrame, w: float, g_term: float, nc: float, shares_wan: float) -> dict:

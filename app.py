@@ -32,11 +32,11 @@ if DARK_MODE:
     GREY, DARK, LIGHT, RED, GREEN = "#a8a8a8", "#ececec", "#5c5c5c", "#ff6b6b", "#4cd28a"
     C = dict(label="#bdbdbd", note="#a9a9a9", box="rgba(255,255,255,0.07)", hi="rgba(255,255,255,0.16)",
              hist="rgba(255,255,255,0.05)", inp="#7fb2ff", ovr="rgba(255,196,0,0.28)", grid="rgba(255,255,255,0.12)",
-             inpbg="rgba(127,178,255,0.10)")
+             inpbg="rgba(127,178,255,0.10)", pend="rgba(255,140,60,0.30)")
 else:
     GREY, DARK, LIGHT, RED, GREEN = "#8c8c8c", "#262626", "#d9d9d9", "#c00000", "#008000"
     C = dict(label="#555", note="#666", box="#f6f6f6", hi="#e6e6e6", hist="#f4f4f4", inp="#0b57d0",
-             ovr="#fff2b3", grid="#e9e9e9", inpbg="rgba(11,87,208,0.06)")
+             ovr="#fff2b3", grid="#e9e9e9", inpbg="rgba(11,87,208,0.06)", pend="#ffd9bf")
 LAYOUT = dict(template="plotly_dark" if DARK_MODE else "simple_white", height=320,
               margin=dict(l=10, r=10, t=40, b=10), font=dict(size=12), legend=dict(orientation="h", y=-0.2),
               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
@@ -151,6 +151,14 @@ def _fin(x, fallback: float = 0.0) -> float:
     return x if np.isfinite(x) else fallback
 
 
+def default_beta(bt: dict | None) -> float:
+    """默认贝塔：回归可靠（R² ≥ 0.1）时用调整后贝塔 0.67 × 原始 + 0.33（Bloomberg / Wind 的做法，向市场均值 1 收敛）；
+    回归几乎没有解释力或取不到行情时用市场平均 1.0。原始回归值在折现率参数的说明里列出。"""
+    if not bt or not np.isfinite(bt.get("beta", np.nan)) or bt.get("r2", 0) < 0.1:
+        return 1.0
+    return 0.67 * bt["beta"] + 0.33
+
+
 def defaults_from(cd: dict) -> M.Assumptions:
     a = cd["annual"]
     L = a.iloc[-1]
@@ -174,20 +182,27 @@ def defaults_from(cd: dict) -> M.Assumptions:
     else:
         other1 = float(L["投资收益及其他"])
     fmed = lambda c: _fin(last3[c].replace([np.inf, -np.inf], np.nan).median())
-    da = float(np.clip(fmed("折旧摊销/营收%"), 0, 20))
+    da = float(np.clip(fmed("折旧摊销/营收%"), 0, 80))        # 晶圆厂、电站等重资产公司可达 30%–40%，不能按 20% 截断
     capex = float(np.clip(max(fmed("资本开支/营收%"), da), 0, 300))
     nwc = float(np.clip(fmed("营运资本/营收%"), 0, 60))
     mcap = cd["quote"]["mcap_yi"]
+    # 投资收益及其他中，其他收益（政府补助、增值税即征即退等）多为经常性经营收益，默认按近三年占比计入自由现金流；
+    # 理财等投资收益不计入（对应的金融资产已在净现金中加回）
+    if "其他收益" in last3:
+        den = float(last3["投资收益及其他"].sum())
+        of = float(np.clip(_fin(last3["其他收益"].sum() / den * 100), 0, 100)) if den > 0 else 0.0
+    else:
+        of = 0.0
     stub = (4 - it["季度数"]) / 4 if it and it.get("季度数") else 1.0
     return M.Assumptions(
         g_first=round(g1, 1), g_last=round(float(np.clip(g1 * 0.4, 3, 10)), 1),
         m_first=round(m1, 1), m_last=round(m1, 1),
-        other_first=round(_fin(other1), 0), other_change=-15.0, other_in_fcf=0.0,
+        other_first=round(_fin(other1), 0), other_change=-15.0, other_in_fcf=round(of / 5) * 5,
         tax=round(float(np.clip(_fin(L["有效税率%"], 25.0), 0, 30)), 2),
         minority=round(float(np.clip(_fin(L["少数股东占比%"]), 0, 60)), 2),
         da_pct=round(da, 2), capex_pct=round(capex, 2), nwc_pct=round(nwc, 2), capex_ty=round(da, 2),
         rf=round(cd["rf"], 2) if cd.get("rf") else 1.7,
-        beta=round(cd["beta"]["beta"], 2) if cd.get("beta") else 1.2,
+        beta=round(default_beta(cd.get("beta")), 2),
         erp=5.5, size_prem=1.0 if mcap < 100 else (0.5 if mcap < 300 else 0.0),
         kd=3.5, g_term=2.5, add_cash=True, add_fin=True, mid_year=True, stub=float(stub),
     )
@@ -214,11 +229,12 @@ DRV_ROWS = [("g", "营收增速（%）"), ("m", "核心经营利润率（%）"),
 
 
 def sheet_grid(rows: pd.DataFrame, key: str, hcols: list, fcols: list, meta: dict, height: int | None = None):
-    """可直接在格子里修改的报表（AgGrid）。
+    """可直接在格子里修改的报表（AgGrid），像 Excel 一样先改、再确认：
     rows：行 = 项目（中文原名），列 = 历史列 + 预测列；
     meta[行名] = {"pct": 百分比行, "dec": 小数位, "bold": 加粗, "fedit": 预测列可改时对应的逐年假设名,
                  "hedit": 历史列可改时对应的年报科目（仅上传年报时）}。
-    修改通过回调写入 session_state 的 ovr（逐年假设）或 pdf_ovr（年报科目），回调在重算之前执行，整页随即按新值重算。"""
+    改动先留在表格里（橙底虚线），可一次改多格、可按 Ctrl/⌘+R 或底部按钮向右填充；
+    点底部「确定修改」后才把整张表传回，与显示时的数值逐格比对，变化的格子写入 ovr / pdf_ovr，整页随即重算。"""
     from st_aggrid import AgGrid, JsCode
     ovr_now = st.session_state.get("ovr", {})
     pdf_now = st.session_state.get("pdf_ovr", {})
@@ -227,7 +243,7 @@ def sheet_grid(rows: pd.DataFrame, key: str, hcols: list, fcols: list, meta: dic
         m = meta.get(r_, {})
         fk, hk = m.get("fedit", ""), m.get("hedit", "")
         rec = {"_key": r_, "_lab": T(r_), "_pct": bool(m.get("pct")), "_dec": int(m.get("dec", 2)),
-               "_bold": bool(m.get("bold")), "_fedit": fk, "_hedit": hk,
+               "_bold": bool(m.get("bold")), "_fedit": fk, "_hedit": hk, "_pend": "",
                "_ovr": ",".join(fcols[i] for i in ovr_now.get(fk, {}) if i < len(fcols)) if fk else "",
                "_hovr": ",".join(f"{y}A" for (y, f) in pdf_now if f == hk) if hk else ""}
         for c_ in hcols + fcols:
@@ -235,6 +251,7 @@ def sheet_grid(rows: pd.DataFrame, key: str, hcols: list, fcols: list, meta: dic
             rec[c_] = None if (v is None or v != v) else float(v)
         recs.append(rec)
     df = pd.DataFrame(recs)
+    editable = bool((df["_fedit"] != "").any() or (df["_hedit"] != "").any())
     fmt_js = JsCode("""function(p){ if (p.value === null || p.value === undefined || isNaN(p.value)) return '—';
         const v = Number(p.value);
         if (p.data._pct) return v.toFixed(2) + '%';
@@ -242,55 +259,142 @@ def sheet_grid(rows: pd.DataFrame, key: str, hcols: list, fcols: list, meta: dic
     parse_js = JsCode(r"""function(p){ const s = String(p.newValue === null || p.newValue === undefined ? '' : p.newValue)
         .replace(/[,%\s]/g, '');
         if (s === '') return null; const v = Number(s); return isNaN(v) ? p.oldValue : v; }""")
+    pend_css = f"s.backgroundColor = '{C['pend']}'; s.outline = '1px dashed {C['inp']}'; s.outlineOffset = '-2px';"
     hist_style = JsCode(f"""function(p){{ const s = {{textAlign: 'right', backgroundColor: '{C["hist"]}'}};
         if (p.data._hedit) {{ s.color = '{C["inp"]}'; s.fontWeight = '600';
             if ((p.data._hovr || '').split(',').includes(p.colDef.field)) s.backgroundColor = '{C["ovr"]}'; }}
+        if ((p.data._pend || '').split(',').includes(p.colDef.field)) {{ {pend_css} }}
         return s; }}""")
     fc_style = JsCode(f"""function(p){{ const s = {{textAlign: 'right'}};
         if (p.data._fedit) {{ s.color = '{C["inp"]}'; s.fontWeight = '600'; s.backgroundColor = '{C["inpbg"]}';
             if ((p.data._ovr || '').split(',').includes(p.colDef.field)) s.backgroundColor = '{C["ovr"]}'; }}
+        if ((p.data._pend || '').split(',').includes(p.colDef.field)) {{ {pend_css} }}
         return s; }}""")
-    cols = [{"field": "_lab", "headerName": T("项目"), "pinned": "left", "minWidth": 150, "flex": 1.5}]
-    cols += [{"field": c_, "headerName": c_, "valueFormatter": fmt_js, "valueParser": parse_js, "cellStyle": hist_style,
-              "editable": JsCode("function(p){ return !!p.data._hedit; }"), "minWidth": 78, "flex": 1}
-             for c_ in hcols]
-    cols += [{"field": c_, "headerName": c_, "valueFormatter": fmt_js, "valueParser": parse_js, "cellStyle": fc_style,
-              "editable": JsCode("function(p){ return !!p.data._fedit; }"), "minWidth": 78, "flex": 1}
-             for c_ in fcols]
-    cols += [{"field": c_, "hide": True} for c_ in ["_key", "_pct", "_dec", "_bold", "_fedit", "_hedit", "_ovr", "_hovr"]]
+    # 底部固定行：左边「确定修改」，右边「向右填充」与操作提示（按钮通过 data-act 区分）
+    btn = (f"display:inline-block;padding:1px 10px;border-radius:4px;border:1px solid {C['inp']};"
+           f"color:{C['inp']};font-weight:600;cursor:pointer;line-height:22px;")
+    apply_lbl, fill_lbl, tip = T("确定修改"), T("向右填充"), T("GRID_TIP")
+    # AG Grid 的 React 版把普通函数当成 React 组件，要渲染 HTML 需用带 init / getGui 的类组件
+    lab_render = JsCode(f"""class LabRenderer {{
+        init(p) {{ this.eGui = document.createElement('span'); this.refresh(p); }}
+        getGui() {{ return this.eGui; }}
+        refresh(p) {{
+            if (p.node.rowPinned === 'bottom') {{
+                let n = 0; p.api.forEachNode(nd => {{ n += (nd.data._pend || '').split(',').filter(x => x).length; }});
+                const on = n > 0 ? 'background:{C["inp"]};color:#fff;' : 'opacity:0.55;';
+                this.eGui.innerHTML = '<span data-act="apply" style="{btn}' + on + '">✓ {apply_lbl}'
+                    + (n > 0 ? '（' + n + '）' : '') + '</span>';
+            }} else {{ this.eGui.textContent = p.value === null || p.value === undefined ? '' : p.value; }}
+            return true; }} }}""")
+    tip_render = JsCode(f"""class TipRenderer {{
+        init(p) {{ this.eGui = document.createElement('span'); this.refresh(p); }}
+        getGui() {{ return this.eGui; }}
+        refresh(p) {{
+            if (p.node.rowPinned === 'bottom') {{
+                this.eGui.innerHTML = '<span data-act="fill" style="{btn}">⇥ {fill_lbl}</span>'
+                    + '<span style="margin-left:10px;opacity:0.7;font-weight:400">{tip}</span>';
+            }} else {{ this.eGui.textContent = (p.valueFormatted !== undefined && p.valueFormatted !== null)
+                ? p.valueFormatted : (p.value === null || p.value === undefined ? '' : p.value); }}
+            return true; }} }}""")
+    # 向右填充：把选中格的值复制到同一行右侧连续的可编辑格（遇到不可编辑的列即停，与 Excel 的 Ctrl+R 一致）
+    fill_fn = """function(api, rowIndex, colId){
+        const node = api.getDisplayedRowAtIndex(rowIndex); if (!node || node.rowPinned) return;
+        const cols = api.getAllDisplayedColumns(); const i = cols.findIndex(c => c.getColId() === colId);
+        if (i < 0 || !cols[i].isCellEditable(node)) return;
+        const v = node.data[colId];
+        for (let j = i + 1; j < cols.length; j++) { if (!cols[j].isCellEditable(node)) break; node.setDataValue(cols[j].getColId(), v); }
+    }"""
+    first_data = (hcols + fcols)[0] if (hcols + fcols) else None
+    n_span = len(hcols + fcols)
+    cols = [{"field": "_lab", "headerName": T("项目"), "pinned": "left", "minWidth": 150, "flex": 1.5,
+             "cellRenderer": lab_render}]
+    for c_ in hcols + fcols:
+        d = {"field": c_, "headerName": c_, "valueFormatter": fmt_js, "valueParser": parse_js,
+             "cellStyle": hist_style if c_ in hcols else fc_style,
+             "editable": JsCode("function(p){ return !!p.data._hedit; }" if c_ in hcols
+                                else "function(p){ return !!p.data._fedit; }"),
+             "minWidth": 78, "flex": 1}
+        if c_ == first_data:
+            d["cellRenderer"] = tip_render
+            d["colSpan"] = JsCode(f"function(p){{ return p.node.rowPinned === 'bottom' ? {n_span} : 1; }}")
+        cols.append(d)
+    cols += [{"field": c_, "hide": True} for c_ in ["_key", "_pct", "_dec", "_bold", "_fedit", "_hedit", "_ovr", "_hovr", "_pend"]]
     opts = {"columnDefs": cols, "singleClickEdit": True, "stopEditingWhenCellsLoseFocus": True,
             "suppressMovableColumns": True, "rowHeight": 30, "headerHeight": 32,
-            "getRowStyle": JsCode("function(p){ return p.data._bold ? {fontWeight: 700} : null; }")}
+            "getRowStyle": JsCode(f"""function(p){{
+                if (p.node.rowPinned) return {{background: '{C["box"]}', fontWeight: 600}};
+                return p.data._bold ? {{fontWeight: 700}} : null; }}"""),
+            # 改动先标记为「待确定」，并更新底部按钮上的数量
+            "onCellValueChanged": JsCode("""function(e){
+                if (e.node.rowPinned) return;
+                const f = e.colDef.field, p = (e.data._pend || '').split(',').filter(x => x);
+                if (!p.includes(f)) { p.push(f); e.data._pend = p.join(','); }
+                e.api.refreshCells({rowNodes: [e.node], force: true});
+                e.api.refreshCells({columns: ['_lab'], force: true}); }"""),
+            "onCellFocused": JsCode("""function(e){
+                if (e.rowPinned || e.rowIndex === null || e.rowIndex === undefined || !e.column) return;
+                e.api.__vwLast = {row: e.rowIndex, col: (typeof e.column === 'string') ? e.column : e.column.getColId()}; }"""),
+            "onCellKeyDown": JsCode(f"""function(e){{
+                const ev = e.event; if (!ev || e.node.rowPinned) return;
+                if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'r' || ev.key === 'R')) {{
+                    ev.preventDefault(); ev.stopPropagation();
+                    ({fill_fn})(e.api, e.rowIndex, e.column.getColId());
+                    e.api.setFocusedCell(e.rowIndex, e.column.getColId()); }} }}"""),
+            "onCellClicked": JsCode(f"""function(e){{
+                if (e.node.rowPinned !== 'bottom') return;
+                const t = e.event && e.event.target, a = t && t.closest ? t.closest('[data-act]') : null;
+                if (a && a.dataset.act === 'fill' && e.api.__vwLast) {{
+                    const L = e.api.__vwLast; ({fill_fn})(e.api, L.row, L.col); e.api.setFocusedCell(L.row, L.col); }} }}""")}
+    if editable:
+        opts["pinnedBottomRowData"] = [{"_lab": ""}]
+    # 只有点「确定修改」才把表格数据传回 Python（其余点击、编辑都只在表格内完成，不触发重算）
+    should_return = JsCode("""function(x){
+        const e = x.eventData; if (x.streamlitRerunEventTriggerName !== 'cellClicked' || !e || !e.node) return false;
+        if (e.node.rowPinned !== 'bottom') return false;
+        const t = e.event && e.event.target, a = t && t.closest ? t.closest('[data-act]') : null;
+        if (!(a && a.dataset.act === 'apply')) return false;
+        let n = 0; e.api.forEachNode(nd => { n += (nd.data._pend || '').split(',').filter(x => x).length; });
+        return n > 0; }""")
 
-    def on_edit(resp):
-        ev = resp.event_data or {}
-        if ev.get("type") != "cellValueChanged":
-            return
-        row, col = ev.get("data") or {}, (ev.get("colDef") or {}).get("field")
-        v = ev.get("newValue")
+    def num(x):
         try:
-            v = None if v is None or v == "" else float(v)
+            x = float(x)
         except (TypeError, ValueError):
+            return None
+        return None if x != x else x
+
+    def on_apply(resp):
+        new = resp.data
+        if new is None or len(new) == 0 or "_key" not in new.columns:
             return
-        if v is not None and v != v:
-            v = None
-        if col in fcols and row.get("_fedit"):
-            cells = st.session_state.setdefault("ovr", {}).setdefault(row["_fedit"], {})
-            i_ = fcols.index(col)
-            if v is None:
-                cells.pop(i_, None)
-            else:
-                cells[i_] = v
-        elif col in hcols and row.get("_hedit"):
-            st.session_state.setdefault("pdf_ovr", {})[(int(col.rstrip("A")), row["_hedit"])] = \
-                float("nan") if v is None else v
+        src = df.set_index("_key")
+        for _, r in new.iterrows():
+            if r["_key"] not in src.index:
+                continue
+            s0 = src.loc[r["_key"]]
+            fk, hk = s0["_fedit"], s0["_hedit"]
+            for c_ in (fcols if fk else []) + (hcols if hk else []):
+                nv, ov = num(r.get(c_)), num(s0[c_])
+                if nv == ov or (nv is not None and ov is not None and abs(nv - ov) < 1e-9):
+                    continue
+                if c_ in fcols:
+                    cells = st.session_state.setdefault("ovr", {}).setdefault(fk, {})
+                    i_ = fcols.index(c_)
+                    if nv is None:
+                        cells.pop(i_, None)
+                    else:
+                        cells[i_] = nv
+                else:
+                    st.session_state.setdefault("pdf_ovr", {})[(int(c_.rstrip("A")), hk)] = \
+                        float("nan") if nv is None else nv
 
     # 修改记录变化时换一个 key 让表格重新挂载，保证黄底等样式按最新修改重新计算
     ver = hashlib.md5(repr((sorted((k, sorted(v.items())) for k, v in ovr_now.items()),
                             sorted(pdf_now.items()))).encode()).hexdigest()[:8]
-    AgGrid(df, gridOptions=opts, height=height or 32 + 30 * len(df) + 6, allow_unsafe_jscode=True,
-           update_on=["cellValueChanged"], key=f"{key}_{ver}", callback=on_edit, server_sync_strategy="server_wins",
-           show_toolbar=False, show_search=False, show_download_button=False, theme="streamlit")
+    AgGrid(df, gridOptions=opts, height=height or 32 + 30 * (len(df) + int(editable)) + 6, allow_unsafe_jscode=True,
+           update_on=["cellClicked"], should_grid_return=should_return, key=f"{key}_{ver}", callback=on_apply,
+           server_sync_strategy="server_wins", show_toolbar=False, show_search=False, show_download_button=False,
+           theme="streamlit")
 
 
 def current_assumptions() -> M.Assumptions:
@@ -377,7 +481,7 @@ elif go_btn or "cd" not in st.session_state or st.session_state.get("key") != f"
         if mode == "demo":
             cd = fetch_demo(code)
         else:
-            with TOP.container(), st.spinner(T("正在从东方财富、腾讯、新浪拉取数据（首次约 30–60 秒，之后一小时内有缓存）……")):
+            with TOP.container(), st.spinner(T("正在从东方财富、腾讯、新浪拉取数据（首次约 1–3 分钟，之后一小时内有缓存）……")):
                 cd = fetch_live(code)
     except Exception as e:  # noqa: BLE001
         if os.path.exists(os.path.join(data.DEMO_DIR, f"{code}.json")):
@@ -434,6 +538,7 @@ dflt = defaults_from(cd)
 m_hi = float(max(60.0, np.ceil((max(dflt.m_first, dflt.m_last) + 15) / 5) * 5))
 m_lo = float(max(-1000.0, min(-10.0, np.floor((min(dflt.m_first, dflt.m_last) - 15) / 5) * 5)))
 cx_hi = float(max(30.0, np.ceil((dflt.capex_pct + 10) / 5) * 5))
+da_hi = float(max(20.0, np.ceil((dflt.da_pct + 10) / 5) * 5))
 
 # ─────────────────────────── 侧边栏：假设
 with st.sidebar:
@@ -454,11 +559,11 @@ with st.sidebar:
                         help=T("= 利润总额 − 核心经营利润，含理财收益、政府补助、公允价值变动等"))
         st.slider(T("投资收益及其他年变化（%）"), -50.0, 50.0, key="a_other_change", step=1.0)
         st.slider(T("其中计入经营现金流的比例（%）"), 0.0, 100.0, key="a_other_in_fcf", step=5.0,
-                  help=T("默认 0：折现法只对核心主业定价，金融资产在净现金中加回。若补助、退税属经常性，可调高"))
+                  help=T("OTHER_FCF_HELP"))
         st.slider(T("有效税率（%）"), 0.0, 30.0, key="a_tax", step=0.1)
 
     with st.expander(T("资本开支与营运资金")):
-        st.slider(T("折旧摊销 / 营收（%）"), 0.0, 20.0, key="a_da_pct", step=0.1)
+        st.slider(T("折旧摊销 / 营收（%）"), 0.0, da_hi, key="a_da_pct", step=0.1)
         st.slider(T("第1年资本开支 / 营收（%）"), 0.0, cx_hi, key="a_capex_pct", step=0.1,
                   help=T("默认取近三年中位数与折旧率的较大者，即长期至少覆盖折旧"))
         st.slider(T("第{n}年及终值年资本开支 / 营收（%）", n=NY), 0.0, cx_hi, key="a_capex_ty", step=0.1,
@@ -472,8 +577,8 @@ with st.sidebar:
                         help=T("默认取最新 10 年期国债收益率"))
         bt = cd.get("beta") or {}
         st.number_input(T("贝塔"), key="a_beta", step=0.05, format="%.2f",
-                        help=T("默认由最近 100 周个股与沪深300周收益率回归计算") + (T(
-                            "：原始值 {raw:.2f}（R² {r2:.2f}），Blume 调整后 {adj:.2f}（= 0.67 × 原始 + 0.33）",
+                        help=T("BETA_HELP") + (T(
+                            "：原始回归值 {raw:.2f}（R² {r2:.2f}），调整后 {adj:.2f}（= 0.67 × 原始 + 0.33）",
                             raw=bt["beta"], r2=bt["r2"], adj=0.67 * bt["beta"] + 0.33) if bt else ""))
         st.number_input(T("市场风险溢价（%）"), key="a_erp", step=0.25, format="%.2f")
         st.number_input(T("规模溢价（%）"), key="a_size_prem", step=0.25, format="%.2f")
@@ -481,6 +586,7 @@ with st.sidebar:
         st.number_input(T("永续增长率（%）"), key="a_g_term", step=0.25, format="%.2f")
         st.checkbox(T("货币资金计入净现金"), key="a_add_cash")
         st.checkbox(T("交易性金融资产计入净现金"), key="a_add_fin")
+        st.checkbox(T("长期股权投资计入"), key="a_add_lte", help=T("LTE_HELP", v=fmt(bs.get("长期股权投资", 0.0) or 0.0)))
         st.checkbox(T("年中折现"), key="a_mid_year", help=T("MID_HELP"))
         st.caption(T("估值基准日 {d}（最新报表日）；第 1 年计入基准日之后 {s:.0%} 的现金流。",
                      d=bs["报告期"], s=st.session_state.get("a_stub", 1.0)))
@@ -941,7 +1047,7 @@ with tabs[0]:
     st.markdown(res_txt)
     st.markdown(T("- **折现时点**：估值基准日 {d}，{conv}；第 1 年计入基准日之后 {s:.0%} 的现金流。终值按终值年（稳定状态）自由现金流计算。\n"
                   "- **模型检查**：{k}/{n} 项通过{extra}（详见「计算表」页签顶部）。",
-                  d=bs["报告期"], conv=T("年中折现") if A.mid_year else T("年末折现"), s=A.stub, k=n_pass, n=len(CHECKS),
+                  d=bs["报告期"], conv=(T("年中折现") if A.mid_year else T("年末折现")).lower(), s=A.stub, k=n_pass, n=len(CHECKS),
                   extra="" if n_pass == len(CHECKS) else T("，未通过：{x}",
                                                           x="、".join(c_ for c_, s_, _ in CHECKS if s_ != "ok"))))
     if TY["FCFF"] < 0 and not NEG:      # 估值为负时上方已有专门说明
@@ -953,9 +1059,7 @@ with tabs[0]:
         st.warning(T("终值占企业价值 {v:.0f}%，估值高度依赖永续假设，结果稳健性有限。", v=D["终值占比%"]))
     bt = cd.get("beta") or {}
     if bt and bt.get("r2", 1) < 0.1:
-        st.warning(T("贝塔回归的 R² 仅 {r2:.2f}，个股与大盘几乎不相关，回归贝塔 {b:.2f} 统计上不可靠。"
-                     "可在左侧「折现率」中改用 Blume 调整后贝塔 {adj:.2f} 或行业贝塔。",
-                     r2=bt["r2"], b=bt["beta"], adj=0.67 * bt["beta"] + 0.33))
+        st.info(T("BETA_LOWR2", r2=bt["r2"], b=bt["beta"]))
     st.markdown(f"<div class='note'>{T('所有结果基于左侧假设，调整任一参数即时重算。数据来自东方财富、腾讯、新浪公开接口，仅供学习研究，不构成投资建议。')}</div>",
                 unsafe_allow_html=True)
     with st.expander(T("数据获取状态")):
@@ -1193,7 +1297,7 @@ with tabs[1]:
             T("数值"): [f"{A.rf:.2f}%", f"{A.beta:.2f}", f"{A.erp:.2f}%", f"{A.size_prem:.2f}%",
                       f"{wc['股权成本']:.2f}%", f"{wc['税后债务成本']:.2f}%", f"{wc['债务权重']:.2f}%",
                       f"{W:.2f}%"],
-            T("说明"): TL(["10年期国债", "100周回归" if cd.get("beta") else "手动", "", "",
+            T("说明"): TL(["10年期国债", "100周回归，调整后" if (cd.get("beta") or {}).get("r2", 0) >= 0.1 else "市场平均（回归不可靠或无行情）", "", "",
                          "Rf + β×ERP + 规模溢价", "Kd × (1 − 税率)", "有息负债 ÷（有息负债 + 市值）", ""])}),
             hide_index=True, width="stretch")
     with r:
@@ -1203,12 +1307,12 @@ with tabs[1]:
             "终值 = 终值年 FCFF {f} ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>"
             "终值现值 = {tv} × {df:.4f} = {tpv}<br>"
             "企业价值 = {ev}　（终值占比 {tvp:.1f}%）<br>"
-            "＋ 货币资金 {cash}　＋ 交易性金融资产 {fin}　− 有息负债 {debt}<br>"
+            "＋ 货币资金 {cash}　＋ 交易性金融资产 {fin}　＋ 长期股权投资 {lte}　− 有息负债 {debt}<br>"
             "股权价值 = {eq}　÷ 总股本 {sh} 万股<br>"
             "<b>每股价值 = {ps:.2f} 元</b>",
             pv=fmt(D["预测期现值合计"]), f=fmt(TY["FCFF"]), g=A.g_term, w=W, tv=fmt(D["终值"]),
             df=D["折现因子"][-1], tpv=fmt(D["终值现值"]), ev=fmt(D["企业价值"]), tvp=D["终值占比%"],
-            cash=fmt(ncd["货币资金"]), fin=fmt(ncd["交易性金融资产"]), debt=fmt(ncd["有息负债"]),
+            cash=fmt(ncd["货币资金"]), fin=fmt(ncd["交易性金融资产"]), lte=fmt(ncd["长期股权投资"]), debt=fmt(ncd["有息负债"]),
             eq=fmt(D["股权价值"]), sh=fmt(shares_wan), ps=D["每股价值"]) + "</div>", unsafe_allow_html=True)
         st.caption(T("金额单位：万元；净现金取 {d} 资产负债表", d=bs["报告期"]))
 

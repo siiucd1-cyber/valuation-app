@@ -52,8 +52,8 @@ def _sheet(name: str) -> str:
 ROW = {"g": 5, "rev": 6, "m": 7, "core": 8, "other": 9, "pbt": 10, "np": 11, "nopat": 12,
        "da_pct": 13, "da": 14, "cx_pct": 15, "cx": 16, "dnwc": 17, "fcff": 18, "frac": 19, "t": 20, "disc": 21, "pv": 22,
        "ke": 25, "kd": 26, "wd": 27, "wacc": 29, "gt": 30, "pvsum": 33, "tv": 34, "tvpv": 35, "ev": 36,
-       "cash": 37, "fin": 38, "debt": 39, "eq": 40, "sh": 41, "ps": 42, "tvp": 43, "vs": 44,
-       "m_ev0": 48, "m_ev1": 49, "m_pe0": 50, "m_pe1": 51, "m_tv": 52, "chk": 56}
+       "cash": 37, "fin": 38, "lte": 39, "debt": 40, "eq": 41, "sh": 42, "ps": 43, "tvp": 44, "vs": 45,
+       "m_ev0": 49, "m_ev1": 50, "m_pe0": 51, "m_pe1": 52, "m_tv": 53, "chk": 57}
 DRIVER_ROWS = ("g", "m", "other", "da_pct", "cx_pct")     # 逐年假设所在行
 MULT = '0.0"x"'
 GOOD = PatternFill("solid", fgColor="D9EAD3")
@@ -144,7 +144,7 @@ def write_dcf(wb, R: dict, SF: str, SS: str, base_label: str, base_cells: dict,
     ebitda0 = f"({B('core')}+{B('rev')}*{B('da_pct')}/100)"
     ebitda1 = f"(C{X['core']}+C{X['da']})"
     ebitda_t = f"({ty('core')}+{ty('da')})"
-    mev = f"({R['mcap']}-({B('cash')}+{B('fin')}-{B('debt')}))"
+    mev = f"({R['mcap']}-({B('cash')}+{B('fin')}+{B('lte')}-{B('debt')}))"
     blk = [("ke", "股权成本（%）", f"={R['rf']}+{R['beta']}*{R['erp']}+{R['sp']}", PCT),
            ("kd", "税后债务成本（%）", f"={R['kd']}*(1-{R['tax']}/100)", PCT),
            ("wd", "债务权重（%）", f"=IF({R['debt']}+{R['mcap']}>0,{R['debt']}/({R['debt']}+{R['mcap']})*100,0)", PCT),
@@ -156,8 +156,9 @@ def write_dcf(wb, R: dict, SF: str, SS: str, base_label: str, base_cells: dict,
            ("ev", "企业价值", f"={B('pvsum')}+{B('tvpv')}", N2),
            ("cash", "加：货币资金", f"={R['cash']}*{R['add_cash']}", N2),
            ("fin", "加：交易性金融资产", f"={R['fin']}*{R['add_fin']}", N2),
+           ("lte", "加：长期股权投资", f"={R['lte']}*{R['add_lte']}", N2),
            ("debt", "减：有息负债", f"={R['debt']}", N2),
-           ("eq", "股权价值", f"={B('ev')}+{B('cash')}+{B('fin')}-{B('debt')}", N2),
+           ("eq", "股权价值", f"={B('ev')}+{B('cash')}+{B('fin')}+{B('lte')}-{B('debt')}", N2),
            ("sh", "总股本（万股）", f"={R['shares']}", N2),
            ("ps", "每股价值（元）", f"={B('eq')}/{B('sh')}", N2),
            ("tvp", "终值占企业价值（%）", f"={B('tvpv')}/{B('ev')}*100", PCT),
@@ -253,7 +254,7 @@ def write_dcf(wb, R: dict, SF: str, SS: str, base_label: str, base_cells: dict,
                      f"1/(1+{w}/100)^{F}$C${X['t']}:${LC}${X['t']})")
     grid(4, T("每股价值（元）"), lambda w, g, r_, j: (
         f"=IF({w}<={g},\"—\",({pv_(w)}+{fty(g)}/({w}/100-{g}/100)/(1+{w}/100)^{a_('t')}"
-        f"+{F}$B${X['cash']}+{F}$B${X['fin']}-{F}$B${X['debt']})/{sh_})"), N2)
+        f"+{F}$B${X['cash']}+{F}$B${X['fin']}+{F}$B${X['lte']}-{F}$B${X['debt']})/{sh_})"), N2)
     ebt = lambda g: f"(({a_('core')}+{a_('da')})*(1+{g}/100))"
     grid(12, T("终值隐含 EV/EBITDA（倍）"), lambda w, g, r_, j: (
         f"=IF({w}<={g},\"—\",IF(OR({ebt(g)}<=0,{fty(g)}<=0),\"n.m.\",{fty(g)}/({w}/100-{g}/100)/{ebt(g)}))"), MULT)
@@ -302,7 +303,7 @@ def build_workbook(cd: dict, A, res: dict) -> bytes:
         ("mino", "少数股东占比（%）", A.minority, ""),
         ("nwc", "营运资金增加 / 营收增量（%）", A.nwc_pct, "营收增速、利润率、投资收益、折旧摊销与资本开支为逐年假设，见「预测与折现法」表蓝色行"),
         ("rf", "无风险利率（%）", A.rf, "10年期国债"),
-        ("beta", "贝塔", A.beta, "100周回归"),
+        ("beta", "贝塔", A.beta, "默认：100 周回归的调整后贝塔（0.67 × 原始 + 0.33）；R² 低于 0.1 时取 1.0"),
         ("erp", "市场风险溢价（%）", A.erp, ""),
         ("sp", "规模溢价（%）", A.size_prem, ""),
         ("kd", "税前债务成本（%）", A.kd, ""),
@@ -312,9 +313,11 @@ def build_workbook(cd: dict, A, res: dict) -> bytes:
         ("stub", "第 1 年计入比例", A.stub, T("STUB_NOTE", d=bs["报告期"])),
         ("cash", "货币资金（万元）", bs["货币资金"], bs["报告期"]),
         ("fin", "交易性金融资产（万元）", bs["交易性金融资产"], bs["报告期"]),
+        ("lte", "长期股权投资（万元）", bs.get("长期股权投资", 0.0) or 0.0, bs["报告期"]),
         ("debt", "有息负债（万元）", bs["有息负债"], bs["报告期"]),
         ("add_cash", "货币资金计入净现金（1=是，0=否）", int(A.add_cash), ""),
         ("add_fin", "交易性金融资产计入净现金（1=是，0=否）", int(A.add_fin), ""),
+        ("add_lte", "长期股权投资计入（1=是，0=否）", int(A.add_lte), "联营、合营企业的利润不在自由现金流里，按账面价值加回"),
         ("shares", "总股本（万股）", q["shares"] / 1e4, "行情接口"),
         ("mcap", "总市值（万元）", q["mcap_yi"] * 1e4, "行情接口"),
         ("price", "现价（元）", q["price"], "行情接口"),

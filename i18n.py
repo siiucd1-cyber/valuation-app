@@ -70,6 +70,14 @@ def tr_msg(s: str) -> str:
 
 
 ZH = {
+    "LTE_HELP": ("长期股权投资（联营、合营企业等）按账面价值 {v} 万元计入股权价值：这些公司的利润以投资收益形式入账，"
+                 "不在自由现金流里，不加回就会漏掉这部分价值。"),
+    "OTHER_FCF_HELP": ("「投资收益及其他」中计入自由现金流的比例。默认取近三年其他收益（政府补助、增值税即征即退等，多为经常性的经营收益）"
+                       "占投资收益及其他的比例；理财等投资收益不计入，对应的金融资产已在净现金中加回。"),
+    "BETA_HELP": ("默认：最近 100 周个股与沪深300 周收益率回归，取调整后贝塔（0.67 × 原始 + 0.33，与 Bloomberg、Wind 的调整贝塔一致，"
+                  "向市场均值 1 收敛）；回归 R² 低于 0.1 时说明个股与大盘几乎不相关，回归值不可靠，默认取市场平均 1.0"),
+    "BETA_LOWR2": ("贝塔回归的 R² 仅 {r2:.2f}，个股与大盘几乎不相关，回归贝塔 {b:.2f} 不能作为风险度量，默认已改用市场平均贝塔 1.0。"
+                   "如有可比公司，可在左侧「折现率」中改填行业贝塔。"),
     "YEARS_HELP": ("显式预测期的年数。默认 5 年；扩张期或尚未盈利的公司，5 年往往只覆盖投入期，"
                    "可拉长到 7 或 10 年，让公司在预测期内进入稳定状态。首末年之间的假设按线性过渡。"),
     "NEG_TITLE": "**折现法结果为负（每股 {v:.2f} 元），不作为估值结论。** 实务中不会出具负的估值，负数说明模型设定与公司情况不匹配，需要按原因处理：",
@@ -99,13 +107,18 @@ ZH = {
     "STUB_NOTE": "估值基准日 {d}（最新报表日）：第 1 个预测年只计入基准日之后的部分（年报为 1，半年报为 0.5）",
     "NO_REVENUE": "{y} 年营业收入为 0：本工具的折现法以营收增速和利润率驱动，不适用于尚未产生收入的公司（如未商业化的创新药企），"
                   "这类公司通常按研发管线里程碑或最近一轮融资估值。",
-    "STMT_EDIT_NOTE": ("点击蓝色格子即可直接修改（营收增速、核心经营利润率、投资收益及其他、资本开支 / 营收、折旧摊销 / 营收），"
-                       "回车后三张表、折现法、蒙特卡洛与敏感性分析全部重算，改过的格子变成黄底；清空格子即恢复默认。"
+    "STMT_EDIT_NOTE": ("点击蓝色格子即可修改（营收增速、核心经营利润率、投资收益及其他、资本开支 / 营收、折旧摊销 / 营收），"
+                       "可一次改多格，改过还未确定的格子为橙底虚线；改完点表格底部「确定修改」，三张表、折现法、蒙特卡洛与敏感性分析一起重算，"
+                       "确定过的格子变成黄底；清空格子即恢复默认。选中一格后按 Ctrl/⌘+R 或点「向右填充」，可把该值复制到右侧各年。"
                        "历史列来自财报接口，锁定不可修改；如需使用自己核对过的数据，请在左侧选择「上传年报 PDF」。"),
     "STMT_EDIT_NOTE_PDF": ("点击蓝色格子即可直接修改：预测列的蓝色行是假设，历史列的蓝色行是从年报识别出的科目（识别有误时可在此更正）。"
-                           "回车后全部重算，改过的格子变成黄底；清空假设格即恢复默认。"),
-    "CALC_EDIT_NOTE": ("点击预测年份（E 列）的蓝色格子直接修改，回车后三张表、折现法、蒙特卡洛和敏感性分析即时重算；"
-                       "历史列（A 列）为财报实际值，仅供参考。改过的格子显示为黄底。"),
+                           "可一次改多格，改完点表格底部「确定修改」后全部重算，确定过的格子变成黄底；清空假设格即恢复默认。"
+                           "Ctrl/⌘+R 或「向右填充」可把选中格的值复制到右侧各年。"),
+    "CALC_EDIT_NOTE": ("点击预测年份（E 列）的蓝色格子修改，可一次改多格（未确定的格子为橙底虚线），改完点表格底部「确定修改」，"
+                       "三张表、折现法、蒙特卡洛和敏感性分析一起重算；选中一格按 Ctrl/⌘+R 或点「向右填充」，可把该值复制到右侧各年。"
+                       "历史列（A 列）为财报实际值，仅供参考。确定过的格子显示为黄底。"),
+    "确定修改": "确定修改", "向右填充": "向右填充",
+    "GRID_TIP": "可一次改多格，改完点「确定修改」；选中一格按 Ctrl/⌘+R 也可向右填充",
     "HIST_LOCK_NOTE": "历史数据来自财报接口，保持与披露一致，不可修改。若要使用自己核对过的数据，可在左侧选择「上传年报 PDF」，识别结果可以逐项修改。",
     "SHARES_HELP": "年报中识别到的股本会自动使用；未识别到或想用其他股本（如非上市公司的注册资本折算股数）时在此填写。",
     "STMT_NOTE_利润表": ("核心经营利润 = 营业总收入 − 营业总成本；投资收益及其他 = 利润总额 − 核心经营利润（含理财收益、补助等）。"
@@ -204,7 +217,10 @@ ZH = {
         "（东方财富 K 线接口拒绝境外 IP，线上服务器实际走腾讯）。每项实际来源见首页「数据获取状态」。非官方授权数据，接口可能随网站改版失效。\n"
         "- **核心经营利润** =（营业总收入 − 营业总成本），营业总成本已含四项费用；"
         "**投资收益及其他** = 利润总额 − 核心经营利润。\n"
-        "- **贝塔**：最近 100 周个股与沪深300 周收益率回归。\n"
+        "- **投资收益及其他**：其中的其他收益（政府补助、增值税即征即退等）默认按近三年占比计入自由现金流；理财等投资收益不计入，"
+        "对应金融资产在净现金中加回；长期股权投资按账面价值计入股权价值。\n"
+        "- **贝塔**：最近 100 周个股与沪深300 周收益率回归，默认取调整后贝塔（0.67 × 原始 + 0.33）；"
+        "回归 R² 低于 0.1 时视为不可靠，默认取市场平均 1.0。\n"
         "- **蒙特卡洛**：均值取用户假设；标准差与相关系数可选单季滚动 TTM、年度同比或手动输入。\n"
         "- **折现时点**：估值基准日取最新报表日（与净现金同一时点），第 1 年只计入基准日之后的现金流；默认年中折现。\n"
         "- **资本开支与终值**：资本开支 / 营收从第 1 年线性过渡到稳定水平（预测末年，默认等于折旧摊销）；"
@@ -217,6 +233,27 @@ ZH = {
 }
 
 EN = {
+    "加：长期股权投资": "Add: equity-method investments", "长期股权投资（万元）": "Equity-method investments (RMB 10k)",
+    "长期股权投资计入（1=是，0=否）": "Include equity-method investments (1 = yes, 0 = no)",
+    "联营、合营企业的利润不在自由现金流里，按账面价值加回": "Associates' profits are not in free cash flow, so they are added back at book value",
+    "长期股权投资计入": "Include equity-method investments",
+    "LTE_HELP": ("Equity-method investments (associates, joint ventures) are added to equity value at book value, RMB {v} (10k): "
+                 "their profits arrive as investment income, which is not in free cash flow, so leaving them out would miss that value."),
+    "OTHER_FCF_HELP": ("Share of “investment income & other” counted in free cash flow. The default is the 3-year share of other "
+                       "income (government grants, VAT refunds — usually recurring operating income) in that line; investment "
+                       "income from wealth-management products is excluded because the assets are already in net cash."),
+    "BETA_HELP": ("Default: regression of 100 weekly returns against the CSI 300, using the adjusted beta (0.67 × raw + 0.33, as "
+                  "Bloomberg and Wind do, pulling towards the market average of 1). If the regression R² is below 0.1 the stock "
+                  "barely moves with the market and the raw estimate is unreliable, so the default is the market beta of 1.0"),
+    "BETA_LOWR2": ("The beta regression has R² of only {r2:.2f}; the stock barely moves with the market and the raw beta of {b:.2f} "
+                   "is not a usable risk measure, so the default is the market beta of 1.0. Enter an industry beta under "
+                   "“Discount rate” on the left if you have comparables."),
+    "：原始回归值 {raw:.2f}（R² {r2:.2f}），调整后 {adj:.2f}（= 0.67 × 原始 + 0.33）":
+        ": raw regression {raw:.2f} (R² {r2:.2f}), adjusted {adj:.2f} (= 0.67 × raw + 0.33)",
+    "100周回归，调整后": "100-week regression, adjusted",
+    "市场平均（回归不可靠或无行情）": "Market average (unreliable regression or no prices)",
+    "默认：100 周回归的调整后贝塔（0.67 × 原始 + 0.33）；R² 低于 0.1 时取 1.0":
+        "Default: adjusted 100-week regression beta (0.67 × raw + 0.33); 1.0 if R² is below 0.1",
     "为负时不作为估值结论，需按原因调整假设或改用其他方法": "A negative value is not a conclusion; fix the cause or use another method",
     "资本开支 / 营收从第 1 年线性过渡到稳定水平（预测末年）；「终值年」= 预测末年按永续增长率外推一年，营运资金按永续增速计算；终值 = 终值年 FCFF ÷ (WACC − g)。":
         "Capex / revenue moves linearly from year 1 to a steady-state level by the final forecast year; the terminal year extends it by one year at terminal growth, with working capital at terminal growth; TV = terminal-year FCFF ÷ (WACC − g).",
@@ -298,8 +335,8 @@ EN = {
                   "milestones or the latest funding round.",
     "；输入其他代码会自动改为实时获取": "; any other code is fetched live automatically",
     "演示数据只有 {d}，已切换到「实时数据」获取 {c}。": "The demo snapshot only covers {d}; switched to Live to fetch {c}.",
-    "正在从东方财富、腾讯、新浪拉取数据（首次约 30–60 秒，之后一小时内有缓存）……":
-        "Fetching data from Eastmoney, Tencent and Sina (about 30–60 s the first time, cached for an hour afterwards)…",
+    "正在从东方财富、腾讯、新浪拉取数据（首次约 1–3 分钟，之后一小时内有缓存）……":
+        "Fetching data from Eastmoney, Tencent and Sina (1–3 minutes the first time, cached for an hour afterwards)…",
     "实时数据获取失败，已改用演示快照。原因：{e}": "Live data failed; using the demo snapshot instead. Reason: {e}",
     "数据获取失败：{e}": "Data fetch failed: {e}",
     "恢复数据默认值": "Reset to data-driven defaults",
@@ -492,8 +529,8 @@ EN = {
     "Kd × (1 − 税率)": "Kd × (1 − tax rate)",
     "有息负债 ÷（有息负债 + 市值）": "Debt ÷ (debt + market cap)",
     "估值桥": "Valuation bridge",
-    "预测期现值合计　{pv}<br>终值 = 终值年 FCFF {f} ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>终值现值 = {tv} × {df:.4f} = {tpv}<br>企业价值 = {ev}　（终值占比 {tvp:.1f}%）<br>＋ 货币资金 {cash}　＋ 交易性金融资产 {fin}　− 有息负债 {debt}<br>股权价值 = {eq}　÷ 总股本 {sh} 万股<br><b>每股价值 = {ps:.2f} 元</b>":
-        "PV of forecast FCFF  {pv}<br>Terminal value = terminal-year FCFF {f} ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>PV of terminal value = {tv} × {df:.4f} = {tpv}<br>Enterprise value = {ev}  (terminal share {tvp:.1f}%)<br>+ cash {cash}  + trading financial assets {fin}  − debt {debt}<br>Equity value = {eq}  ÷ shares {sh} (10k)<br><b>Value per share = RMB {ps:.2f}</b>",
+    "预测期现值合计　{pv}<br>终值 = 终值年 FCFF {f} ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>终值现值 = {tv} × {df:.4f} = {tpv}<br>企业价值 = {ev}　（终值占比 {tvp:.1f}%）<br>＋ 货币资金 {cash}　＋ 交易性金融资产 {fin}　＋ 长期股权投资 {lte}　− 有息负债 {debt}<br>股权价值 = {eq}　÷ 总股本 {sh} 万股<br><b>每股价值 = {ps:.2f} 元</b>":
+        "PV of forecast FCFF  {pv}<br>Terminal value = terminal-year FCFF {f} ÷ ({w:.2f}% − {g:.2f}%) = {tv}<br>PV of terminal value = {tv} × {df:.4f} = {tpv}<br>Enterprise value = {ev}  (terminal share {tvp:.1f}%)<br>+ cash {cash}  + trading financial assets {fin}  + equity investments {lte}  − debt {debt}<br>Equity value = {eq}  ÷ shares {sh} (10k)<br><b>Value per share = RMB {ps:.2f}</b>",
     "金额单位：万元；净现金取 {d} 资产负债表": "Amounts in RMB 10k; net cash from the {d} balance sheet",
     "盈利预测与自由现金流（万元）": "Forecast and free cash flow (RMB 10k)",
     "NOPAT": "NOPAT", "FCFF": "FCFF",
@@ -630,7 +667,11 @@ EN = {
         "dashboard. The data is not officially licensed and endpoints may break when the sites change.\n"
         "- **Core operating profit** = total revenue − total operating cost (which already includes the four expense "
         "lines); **investment income & other** = pre-tax profit − core operating profit.\n"
-        "- **Beta**: regression of the last 100 weekly returns against the CSI 300.\n"
+        "- **Investment income & other**: other income (government grants, VAT refunds) is counted in free cash flow by its "
+        "3-year share by default; investment income from wealth-management products is excluded because those assets are in "
+        "net cash; equity-method investments are added at book value.\n"
+        "- **Beta**: regression of the last 100 weekly returns against the CSI 300; the default is the adjusted beta "
+        "(0.67 × raw + 0.33), or the market beta of 1.0 when the regression R² is below 0.1.\n"
         "- **Monte Carlo**: means follow your assumptions; standard deviations and correlation come from rolling TTM, "
         "annual YoY or manual input.\n"
         "- **Timing**: the valuation date is the latest balance-sheet date (the same date as net cash); year 1 counts only "
@@ -815,12 +856,15 @@ EN = {
     # ── 计算表
     "蓝字 = 可直接修改": "Blue = editable",
     "STMT_EDIT_NOTE": ("Click a blue cell to edit it (revenue growth, core margin, investment income & other, capex / revenue, "
-                       "D&A / revenue). After Enter, the statements, DCF, Monte Carlo and sensitivity all recalculate and the "
-                       "edited cell turns yellow; clear a cell to restore the default. Historical columns come from the data "
+                       "D&A / revenue). Edit as many cells as you like (pending cells are orange with a dashed outline), then "
+                       "click Apply at the bottom of the table: the statements, DCF, Monte Carlo and sensitivity recalculate "
+                       "together and applied cells turn yellow; clear a cell to restore the default. Select a cell and press "
+                       "Ctrl/⌘+R or click Fill right to copy it across the later years. Historical columns come from the data "
                        "endpoint and are locked; to use figures you have checked, choose “Upload annual report PDF”."),
     "STMT_EDIT_NOTE_PDF": ("Click a blue cell to edit it: blue rows in forecast columns are assumptions, blue rows in historical "
-                           "columns are line items extracted from the reports (correct them here if needed). Everything "
-                           "recalculates after Enter and edited cells turn yellow; clear an assumption cell to restore the default."),
+                           "columns are line items extracted from the reports (correct them here if needed). Edit several cells, "
+                           "then click Apply at the bottom to recalculate; applied cells turn yellow; clear an assumption cell to "
+                           "restore the default. Ctrl/⌘+R or Fill right copies the selected cell across the later years."),
     "年报原始科目（全部年份，可修改）": "All extracted line items (all years, editable)",
     "计算表": "Model",
     "蓝字 = 由假设驱动": "Blue = driven by assumptions", "黄底 = 手动修改过": "Yellow = edited",
@@ -833,8 +877,12 @@ EN = {
     "已手动修改 {n} 格：{items}。其余年份仍按左侧首末年假设线性插值。":
         "{n} cell(s) edited: {items}. Other years still interpolate between the first- and last-year assumptions on the left.",
     "撤销全部手动修改": "Undo all edits",
-    "CALC_EDIT_NOTE": ("Click a blue forecast cell (E columns) to edit it; after Enter the statements, DCF, Monte Carlo and "
-                       "sensitivity recalculate. Historical columns (A) are reported figures for reference. Edited cells turn yellow."),
+    "CALC_EDIT_NOTE": ("Click a blue forecast cell (E columns) to edit it. Edit several cells (pending cells are orange with a "
+                       "dashed outline), then click Apply at the bottom of the table and the statements, DCF, Monte Carlo and "
+                       "sensitivity recalculate together. Select a cell and press Ctrl/⌘+R or click Fill right to copy it across "
+                       "the later years. Historical columns (A) are reported figures for reference. Applied cells turn yellow."),
+    "确定修改": "Apply", "向右填充": "Fill right",
+    "GRID_TIP": "Edit several cells, then click Apply; select a cell and press Ctrl/⌘+R to fill right",
     "其余假设在左侧调整：有效税率 {tax:.1f}%、营运资本 / 营收增量 {nwc:.1f}%、投资收益计入现金流比例 {of:.0f}%、分红率 {po:.0f}%（只影响预测资产负债表）。":
         "Other assumptions are set on the left: effective tax {tax:.1f}%, working capital / revenue increase {nwc:.1f}%, "
         "investment income counted in cash flow {of:.0f}%, payout ratio {po:.0f}% (forecast balance sheet only).",

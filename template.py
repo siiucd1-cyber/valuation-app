@@ -187,9 +187,13 @@ def _build(example: dict | None) -> bytes:
          "估值基准日之后的部分占第 1 个预测年的比例：基准日为基期年末时填 1，用半年报数据时填 0.5"),
         ("cash", "货币资金（万元）", bs.get("货币资金"), _ie(f"{H}{LAST}18"), "建议用最新一期报表；参考：最近年报"),
         ("fin", "交易性金融资产（万元）", bs.get("交易性金融资产"), _ie(f"{H}{LAST}19"), "同上"),
+        ("lte", "长期股权投资（万元）", (bs.get("长期股权投资") or 0.0) if example else 0.0, None,
+         "资产负债表：长期股权投资（联营、合营企业），建议用最新一期报表"),
         ("debt", "有息负债（万元）", bs.get("有息负债"), _ie(f"{H}{LAST}37"), "同上"),
         ("add_cash", "货币资金计入净现金（1=是，0=否）", int(A.add_cash) if A is not None else 1, None, ""),
         ("add_fin", "交易性金融资产计入净现金（1=是，0=否）", int(A.add_fin) if A is not None else 1, None, ""),
+        ("add_lte", "长期股权投资计入（1=是，0=否）", int(A.add_lte) if A is not None else 1, None,
+         "联营、合营企业的利润不在自由现金流里，按账面价值加回"),
         ("shares", "总股本（万股）", q["shares"] / 1e4 if q else None, None, ""),
         ("price", "现价（元）", q.get("price"), None, ""),
         ("mcap", "总市值（万元）", None, None, "总股本 × 现价，用于计算债务权重"),
@@ -204,9 +208,9 @@ def _build(example: dict | None) -> bytes:
             _c(wa, i, 2, _ie(f"{R['shares']}*{R['price']}"), BLACK, N2)
         else:
             v = None if v is None else float(v)
-            _c(wa, i, 2, v, BLUE, N2 if (v is not None and abs(v) >= 100) or k in ("cash", "fin", "debt", "shares", "o1")
+            _c(wa, i, 2, v, BLUE, N2 if (v is not None and abs(v) >= 100) or k in ("cash", "fin", "lte", "debt", "shares", "o1")
                else "0.00")
-        _c(wa, i, 3, ref, fmt=N2 if k in ("o1", "cash", "fin", "debt") else PCT)
+        _c(wa, i, 3, ref, fmt=N2 if k in ("o1", "cash", "fin", "lte", "debt") else PCT)
         _c(wa, i, 4, note, NOTE, al="left")
 
     # ── 预测与折现法、敏感性（与网页导出共用同一套公式）
