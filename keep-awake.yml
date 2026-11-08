@@ -1,0 +1,64 @@
+# Streamlit Community Cloud 的免费应用一段时间无人访问就会休眠，访客需要点「Yes, get this app back up!」并等待启动。
+# 这里每 4 小时用无头浏览器访问一次在线应用：正常就停留片刻（算一次访问），休眠就点按钮唤醒。
+name: Keep Streamlit apps awake
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write   # 最后一步用：公开仓库 60 天没有新提交时 GitHub 会停用定时任务，这里定期重新启用
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Visit apps, wake them if asleep
+        shell: python
+        run: |
+          import re, sys
+          from playwright.sync_api import sync_playwright
+
+          URLS = ["https://valuation-workbench.streamlit.app/",
+                  "https://portfolio-optimizer-lab.streamlit.app/"]
+          ASLEEP = re.compile("gone to sleep", re.I)
+          failed = []
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              for url in URLS:
+                  page = browser.new_page()
+                  page.goto(url, wait_until="domcontentloaded", timeout=120_000)
+                  page.wait_for_timeout(10_000)
+                  btn = page.get_by_role("button", name=re.compile("get this app back up", re.I))
+                  if btn.count() > 0:
+                      print(f"{url}: asleep, waking up")
+                      btn.first.click()
+                      page.wait_for_timeout(120_000)          # 等应用启动
+                      page.goto(url, wait_until="domcontentloaded", timeout=120_000)
+                      page.wait_for_timeout(20_000)
+                      if ASLEEP.search(page.content()):
+                          failed.append(url)
+                  else:
+                      print(f"{url}: awake")
+                      page.wait_for_timeout(30_000)           # 停留片刻，算一次访问
+                  page.close()
+              browser.close()
+          if failed:
+              print("still asleep:", failed)
+              sys.exit(1)
+
+      - name: Keep this scheduled workflow enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/keep-awake.yml/enable"
